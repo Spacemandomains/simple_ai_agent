@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/chat.js": {
+      "maxDuration": 60
+    },
+    "api/mcp-proxy.js": {
+      "maxDuration": 60
+    }
+  }
+}
