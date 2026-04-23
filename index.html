@@ -18,17 +18,24 @@
         .msg.user { background: #1e3a5f; }
         .msg.assistant { background: #23262d; }
         .msg.tool { background: #2a1f0a; color: #f0d090; }
-        textarea, button { background: #23262d; color: #eee; border-color: #444; }
+        textarea, select { background: #23262d; color: #eee; border-color: #444; }
       }
       header {
-        padding: 16px 20px;
+        padding: 12px 20px;
         border-bottom: 1px solid #ddd3;
         display: flex;
         align-items: center;
         gap: 12px;
       }
-      header h1 { margin: 0; font-size: 16px; font-weight: 600; }
-      header small { opacity: 0.6; }
+      header h1 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+      select {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
       main {
         max-width: 760px;
         margin: 0 auto;
@@ -71,11 +78,12 @@
       button {
         padding: 0 18px;
         border-radius: 8px;
-        border: 1px solid #ccc;
+        border: none;
         background: #1a73e8;
         color: white;
         font-weight: 600;
         cursor: pointer;
+        font: inherit;
       }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
     </style>
@@ -83,7 +91,11 @@
   <body>
     <header>
       <h1>Hawaii Conditions Agent</h1>
-      <small>claude-sonnet-4-6 + MCP</small>
+      <select id="provider" title="LLM provider">
+        <option value="anthropic">Anthropic — claude-sonnet-4-6</option>
+        <option value="openai">OpenAI — gpt-4o</option>
+        <option value="gemini">Google — gemini-2.0-flash</option>
+      </select>
     </header>
     <main id="log"></main>
     <form id="form">
@@ -96,30 +108,35 @@
       const form = document.getElementById('form');
       const input = document.getElementById('input');
       const send = document.getElementById('send');
+      const providerEl = document.getElementById('provider');
+
+      // history stores {role, content: string} — provider-agnostic
       const history = [];
 
-      function add(role, text) {
+      function add(cls, text) {
         const div = document.createElement('div');
-        div.className = `msg ${role}`;
+        div.className = `msg ${cls}`;
         div.textContent = text;
         log.appendChild(div);
         div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        return div;
       }
 
-      function renderResponse(resp) {
-        for (const block of resp.content || []) {
-          if (block.type === 'text') {
-            add('assistant', block.text);
-          } else if (block.type === 'mcp_tool_use') {
-            add('tool', `→ ${block.name}(${JSON.stringify(block.input)})`);
-          } else if (block.type === 'mcp_tool_result') {
-            const text = (block.content || [])
-              .map((c) => (c.type === 'text' ? c.text : JSON.stringify(c)))
-              .join('\n');
-            add('tool', `← ${text.slice(0, 600)}${text.length > 600 ? '…' : ''}`);
+      function renderBlocks(blocks) {
+        let assistantText = '';
+        for (const b of blocks) {
+          if (b.type === 'text') {
+            assistantText += (assistantText ? '\n' : '') + b.text;
+          } else if (b.type === 'tool_use') {
+            add('tool', `→ ${b.name}(${JSON.stringify(b.input)})`);
+          } else if (b.type === 'tool_result') {
+            const preview = b.content.length > 600
+              ? b.content.slice(0, 600) + '…'
+              : b.content;
+            add('tool', `← ${preview}`);
           }
         }
+        if (assistantText) add('assistant', assistantText);
+        return assistantText;
       }
 
       form.addEventListener('submit', async (e) => {
@@ -135,17 +152,19 @@
           const r = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: history }),
+            body: JSON.stringify({ provider: providerEl.value, messages: history }),
           });
           const data = await r.json();
           if (!r.ok) {
             add('error', `Error: ${data.error || r.statusText}`);
+            history.pop(); // remove the failed user message
           } else {
-            renderResponse(data);
-            history.push({ role: 'assistant', content: data.content });
+            const assistantText = renderBlocks(data.content || []);
+            if (assistantText) history.push({ role: 'assistant', content: assistantText });
           }
         } catch (err) {
           add('error', `Network error: ${err.message}`);
+          history.pop();
         } finally {
           send.disabled = false;
           input.focus();

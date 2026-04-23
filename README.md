@@ -6,40 +6,52 @@ Simple AI Agent for testing the [Hawaii Conditions](https://hawaii-conditions.ve
 
 - Static HTML chat UI (no framework)
 - Vercel Node.js serverless functions
-- `@anthropic-ai/sdk` calling `claude-sonnet-4-6`
-- Anthropic [`mcp_servers`](https://docs.claude.com/en/docs/agents-and-tools/mcp-connector) connector to the Hawaii Conditions MCP
+- `@anthropic-ai/sdk` · `openai` · `@google/genai`
+- Selectable provider: **Anthropic** (`claude-sonnet-4-6`), **OpenAI** (`gpt-4o`), **Google Gemini** (`gemini-2.0-flash`)
 
 ## Architecture
 
 ```
-browser ──► /api/chat ──► Anthropic API
-                              │
-                              ▼ (mcp_servers)
-                         /api/mcp-proxy ──► hawaii-conditions.vercel.app/mcp
-                              ▲
-                              └── injects X-Payment-Token header
+browser ──► /api/chat ──► Anthropic API  (native mcp_servers)
+                     │         │
+                     │         ▼
+                     │    /api/mcp-proxy ──► hawaii-conditions.vercel.app/mcp
+                     │
+                     ├──► OpenAI API  (manual tool loop)
+                     │         │
+                     └──► Gemini API  (manual tool loop)
+                               │
+                               ▼  (both)
+                          /api/mcp-client.js  ──► hawaii-conditions.vercel.app/mcp
 ```
 
-The Hawaii Conditions MCP uses Stripe payment tokens for auth (`X-Payment-Token`
-header), which Anthropic's `mcp_servers` connector cannot send directly. The
-`/api/mcp-proxy` route forwards MCP traffic and adds the header from the
-`HAWAII_PAYMENT_TOKEN` env var.
+- **Anthropic**: uses `mcp_servers` beta — Anthropic's cloud fetches tools and calls `/api/mcp-proxy`, which injects `X-Payment-Token`.
+- **OpenAI / Gemini**: `api/mcp-client.js` discovers tools and runs a manual tool-call loop server-side, calling the Hawaii MCP directly with `X-Payment-Token`.
 
 ## Files
 
-- `index.html` — chat UI
-- `api/chat.js` — calls Claude with `mcp_servers` pointing at the proxy
-- `api/mcp-proxy.js` — forwards MCP requests with `X-Payment-Token` header
-- `vercel.json` — serverless function config
-- `package.json` — declares `@anthropic-ai/sdk`
+| File | Purpose |
+|---|---|
+| `index.html` | Chat UI with provider dropdown |
+| `api/chat.js` | Routes requests to Anthropic, OpenAI, or Gemini |
+| `api/mcp-proxy.js` | Forwards MCP traffic for Anthropic's `mcp_servers` |
+| `api/mcp-client.js` | Server-side MCP JSON-RPC client for OpenAI/Gemini |
+| `vercel.json` | 60 s function timeout |
+| `package.json` | `@anthropic-ai/sdk`, `openai`, `@google/genai` |
 
-## Deploy
+## Deploy to Vercel
 
-1. Import this repo into Vercel (no framework — Vercel auto-detects `api/*` and serves `index.html` statically).
-2. Set environment variables in the Vercel project:
-   - `ANTHROPIC_API_KEY` — your Anthropic API key
-   - `HAWAII_PAYMENT_TOKEN` — Stripe `payment_intent_id` for the Hawaii MCP (paid tools won't work without this)
-3. Deploy.
+1. Import this repo (no framework preset — Vercel auto-detects `api/*` and serves `index.html`).
+2. Set environment variables:
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `GOOGLE_API_KEY` | Google AI Studio API key |
+| `HAWAII_PAYMENT_TOKEN` | Stripe `payment_intent_id` for Hawaii MCP paid tools |
+
+3. Deploy. Only the keys you set will work — unused providers return a clear error.
 
 ## Local dev
 
@@ -48,4 +60,4 @@ npm install
 npx vercel dev
 ```
 
-Set the same env vars in `.env.local`.
+Create `.env.local` with the same variables.
