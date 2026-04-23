@@ -9,12 +9,57 @@ const SYSTEM =
   'You are a helpful assistant with access to tools provided by an MCP server. ' +
   'Use the available tools to answer questions accurately and concisely.';
 
+// Confirm a Stripe payment intent server-side using saved credentials.
+// Returns the confirmed payment intent ID, or null if not configured / needs frontend.
+async function autoConfirmPayment(paymentData) {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  const paymentMethodId = process.env.STRIPE_PAYMENT_METHOD_ID;
+  if (!secretKey || !paymentMethodId) return null;
+
+  const pi = paymentData.payment_methods?.stripe_per_call?.payment_intent;
+  if (!pi?.id) return null;
+
+  const r = await fetch(`https://api.stripe.com/v1/payment_intents/${pi.id}/confirm`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      payment_method: paymentMethodId,
+      off_session: 'true',
+    }).toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(`Stripe: ${err.error?.message || `HTTP ${r.status}`}`);
+  }
+
+  const intent = await r.json();
+  return intent.status === 'succeeded' ? intent.id : null;
+}
+
+// Invoke a tool, auto-paying any 402 if server credentials are configured.
+// Returns { ok, content } on success or { ok: false, paymentRequired } for frontend fallback.
 async function callTool(mcpUrl, name, args, paymentToken) {
   try {
     return { ok: true, content: await invokeTool(mcpUrl, name, args, paymentToken) };
   } catch (err) {
-    if (err.paymentRequired) return { ok: false, paymentRequired: err.paymentRequired };
-    throw err;
+    if (!err.paymentRequired) throw err;
+
+    const confirmedToken = await autoConfirmPayment(err.paymentRequired);
+    if (confirmedToken) {
+      try {
+        return { ok: true, content: await invokeTool(mcpUrl, name, args, confirmedToken) };
+      } catch (retryErr) {
+        if (retryErr.paymentRequired) return { ok: false, paymentRequired: retryErr.paymentRequired };
+        throw retryErr;
+      }
+    }
+
+    return { ok: false, paymentRequired: err.paymentRequired };
   }
 }
 
