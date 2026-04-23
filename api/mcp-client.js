@@ -16,7 +16,13 @@ async function post(method, params, id) {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
+    signal: AbortSignal.timeout(30_000),
   });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`MCP ${res.status}: ${body.slice(0, 200)}`);
+  }
 
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('text/event-stream')) {
@@ -28,11 +34,6 @@ async function post(method, params, id) {
       try { return JSON.parse(data); } catch {}
     }
     throw new Error('Empty SSE response from MCP server');
-  }
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`MCP ${res.status}: ${body.slice(0, 200)}`);
   }
   return res.json();
 }
