@@ -1,5 +1,4 @@
-// Server-side MCP JSON-RPC client for OpenAI and Gemini handlers.
-// Anthropic uses its native mcp_servers parameter instead.
+// Server-side MCP JSON-RPC client for all providers.
 
 async function post(url, method, params, id, paymentToken) {
   const headers = {
@@ -17,6 +16,13 @@ async function post(url, method, params, id, paymentToken) {
 
   if (!res.ok) {
     const body = await res.text();
+    if (res.status === 402) {
+      let parsed;
+      try { parsed = JSON.parse(body); } catch { parsed = { raw: body }; }
+      const err = new Error('Payment required');
+      err.paymentRequired = parsed;
+      throw err;
+    }
     throw new Error(`MCP ${res.status}: ${body.slice(0, 200)}`);
   }
 
