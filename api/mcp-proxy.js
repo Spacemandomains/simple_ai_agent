@@ -1,15 +1,14 @@
-// Streamable-HTTP MCP proxy that forwards requests to the Hawaii Conditions
-// MCP server while injecting the `X-Payment-Token` header expected by its
-// Stripe-based auth. Anthropic's `mcp_servers` parameter points at this
-// endpoint instead of the upstream server directly, since `mcp_servers` only
-// supports bearer-style `Authorization` headers.
-
-const UPSTREAM = 'https://hawaii-conditions.vercel.app/mcp';
+// Streamable-HTTP MCP proxy for Anthropic's mcp_servers feature.
+// Target URL and payment token are passed as query params:
+//   /api/mcp-proxy?target=<encoded-mcp-url>&token=<payment-token>
 
 export const config = { runtime: 'nodejs' };
 
 export default async function handler(req, res) {
-  const paymentToken = process.env.HAWAII_PAYMENT_TOKEN;
+  const target = req.query?.target;
+  if (!target) return res.status(400).json({ error: 'Missing ?target query param' });
+
+  const paymentToken = req.query?.token || process.env.MCP_PAYMENT_TOKEN;
 
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
@@ -29,7 +28,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const upstream = await fetch(UPSTREAM, {
+  const upstream = await fetch(target, {
     method: req.method,
     headers,
     body: body && body.length ? body : undefined,

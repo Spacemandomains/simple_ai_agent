@@ -1,18 +1,14 @@
-// Server-side MCP JSON-RPC client used by OpenAI and Gemini handlers.
+// Server-side MCP JSON-RPC client for OpenAI and Gemini handlers.
 // Anthropic uses its native mcp_servers parameter instead.
 
-const UPSTREAM = 'https://hawaii-conditions.vercel.app/mcp';
-
-async function post(method, params, id) {
+async function post(url, method, params, id, paymentToken) {
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
   };
-  if (process.env.HAWAII_PAYMENT_TOKEN) {
-    headers['X-Payment-Token'] = process.env.HAWAII_PAYMENT_TOKEN;
-  }
+  if (paymentToken) headers['X-Payment-Token'] = paymentToken;
 
-  const res = await fetch(UPSTREAM, {
+  const res = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
@@ -35,24 +31,21 @@ async function post(method, params, id) {
     }
     throw new Error('Empty SSE response from MCP server');
   }
+
   return res.json();
 }
 
-let cachedTools = null;
-
-export async function discoverTools() {
-  if (cachedTools) return cachedTools;
-  await post('initialize', {
+export async function discoverTools(url, paymentToken) {
+  await post(url, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'simple-ai-agent', version: '0.1.0' },
-  }, 1);
-  const resp = await post('tools/list', {}, 2);
-  cachedTools = resp?.result?.tools ?? [];
-  return cachedTools;
+    clientInfo: { name: 'mcp-test-agent', version: '0.1.0' },
+  }, 1, paymentToken);
+  const resp = await post(url, 'tools/list', {}, 2, paymentToken);
+  return resp?.result?.tools ?? [];
 }
 
-export async function invokeTool(name, args) {
-  const resp = await post('tools/call', { name, arguments: args ?? {} }, Date.now());
+export async function invokeTool(url, name, args, paymentToken) {
+  const resp = await post(url, 'tools/call', { name, arguments: args ?? {} }, Date.now(), paymentToken);
   return resp?.result?.content ?? [];
 }

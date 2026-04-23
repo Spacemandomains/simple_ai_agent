@@ -6,16 +6,17 @@ import { discoverTools, invokeTool } from './mcp-client.js';
 export const config = { runtime: 'nodejs' };
 
 const SYSTEM =
-  'You are a helpful assistant for testing the Hawaii Conditions MCP server. ' +
-  'Use the available tools to answer questions about Hawaii weather, surf, trails, ' +
-  'volcanoes, ocean safety, and restaurants. Be concise.';
+  'You are a helpful assistant with access to tools provided by an MCP server. ' +
+  'Use the available tools to answer questions accurately and concisely.';
 
 // ── Anthropic ─────────────────────────────────────────────────────────────────
-// Uses native mcp_servers — Anthropic's cloud calls our proxy, which injects
-// the X-Payment-Token header before forwarding to the upstream MCP server.
-async function handleAnthropic(messages, req) {
+async function handleAnthropic(messages, req, mcpUrl, paymentToken) {
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
+
+  const proxyUrl = new URL(`${proto}://${host}/api/mcp-proxy`);
+  proxyUrl.searchParams.set('target', mcpUrl);
+  if (paymentToken) proxyUrl.searchParams.set('token', paymentToken);
 
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
@@ -28,7 +29,7 @@ async function handleAnthropic(messages, req) {
     system: SYSTEM,
     messages,
     mcp_servers: [
-      { type: 'url', url: `${proto}://${host}/api/mcp-proxy`, name: 'hawaii-conditions' },
+      { type: 'url', url: proxyUrl.toString(), name: 'mcp-server' },
     ],
   });
 
@@ -48,9 +49,9 @@ async function handleAnthropic(messages, req) {
 }
 
 // ── OpenAI ────────────────────────────────────────────────────────────────────
-async function handleOpenAI(messages) {
+async function handleOpenAI(messages, mcpUrl, paymentToken) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const mcpTools = await discoverTools();
+  const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
   const tools = mcpTools.map((t) => ({
     type: 'function',
@@ -86,7 +87,7 @@ async function handleOpenAI(messages) {
       const args = JSON.parse(tc.function.arguments || '{}');
       blocks.push({ type: 'tool_use', name: tc.function.name, input: args });
 
-      const result = await invokeTool(tc.function.name, args);
+      const result = await invokeTool(mcpUrl, tc.function.name, args, paymentToken);
       const resultText = result.map((c) => c.text ?? JSON.stringify(c)).join('\n');
       blocks.push({ type: 'tool_result', name: tc.function.name, content: resultText });
 
@@ -94,13 +95,13 @@ async function handleOpenAI(messages) {
     }
   }
 
-  return { content: blocks };
+  return { content: blocks, tools: mcpTools.length };
 }
 
 // ── Gemini ────────────────────────────────────────────────────────────────────
-async function handleGemini(messages) {
+async function handleGemini(messages, mcpUrl, paymentToken) {
   const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
-  const mcpTools = await discoverTools();
+  const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
   const functionDeclarations = mcpTools.map((t) => ({
     name: t.name,
@@ -108,7 +109,6 @@ async function handleGemini(messages) {
     parameters: t.inputSchema || { type: 'object', properties: {} },
   }));
 
-  // Build contents array; last user message drives the loop
   const contents = messages.map((m) => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
@@ -139,7 +139,7 @@ async function handleGemini(messages) {
         const { name, args } = part.functionCall;
         blocks.push({ type: 'tool_use', name, input: args });
 
-        const result = await invokeTool(name, args);
+        const result = await invokeTool(mcpUrl, name, args, paymentToken);
         const resultText = result.map((c) => c.text ?? JSON.stringify(c)).join('\n');
         blocks.push({ type: 'tool_result', name, content: resultText });
 
@@ -151,7 +151,7 @@ async function handleGemini(messages) {
     contents.push({ role: 'user', parts: fnResponses });
   }
 
-  return { content: blocks };
+  return { content: blocks, tools: mcpTools.length };
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -168,6 +168,10 @@ export default async function handler(req, res) {
   const messages = Array.isArray(payload?.messages) ? payload.messages : null;
   if (!messages) return res.status(400).json({ error: 'Missing messages array' });
 
+  const mcpUrl = payload.mcpUrl;
+  if (!mcpUrl) return res.status(400).json({ error: 'Missing mcpUrl' });
+
+  const paymentToken = payload.paymentToken || undefined;
   const provider = payload.provider || 'anthropic';
 
   const keyMap = {
@@ -182,9 +186,9 @@ export default async function handler(req, res) {
 
   try {
     let result;
-    if (provider === 'anthropic') result = await handleAnthropic(messages, req);
-    else if (provider === 'openai') result = await handleOpenAI(messages);
-    else result = await handleGemini(messages);
+    if (provider === 'anthropic') result = await handleAnthropic(messages, req, mcpUrl, paymentToken);
+    else if (provider === 'openai') result = await handleOpenAI(messages, mcpUrl, paymentToken);
+    else result = await handleGemini(messages, mcpUrl, paymentToken);
 
     res.status(200).json(result);
   } catch (err) {
