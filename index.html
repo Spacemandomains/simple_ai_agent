@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hawaii Conditions Agent</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        background: #f6f7f9;
+        color: #1a1a1a;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #14161a; color: #eee; }
+        .msg.user { background: #1e3a5f; }
+        .msg.assistant { background: #23262d; }
+        .msg.tool { background: #2a1f0a; color: #f0d090; }
+        textarea, select { background: #23262d; color: #eee; border-color: #444; }
+      }
+      header {
+        padding: 12px 20px;
+        border-bottom: 1px solid #ddd3;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      header h1 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+      select {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .msg {
+        padding: 10px 14px;
+        border-radius: 10px;
+        white-space: pre-wrap;
+        line-height: 1.45;
+        font-size: 14px;
+      }
+      .msg.user { background: #dbeafe; align-self: flex-end; max-width: 80%; }
+      .msg.assistant { background: #fff; align-self: flex-start; max-width: 90%; border: 1px solid #0001; }
+      .msg.tool { background: #fff7e6; font-family: ui-monospace, monospace; font-size: 12px; }
+      .msg.error { background: #fee; color: #900; }
+      form {
+        position: sticky;
+        bottom: 0;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 12px 20px 20px;
+        display: flex;
+        gap: 8px;
+        background: inherit;
+      }
+      textarea {
+        flex: 1;
+        resize: none;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #ccc;
+        font: inherit;
+        min-height: 44px;
+        max-height: 160px;
+      }
+      button {
+        padding: 0 18px;
+        border-radius: 8px;
+        border: none;
+        background: #1a73e8;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        font: inherit;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Hawaii Conditions Agent</h1>
+      <select id="provider" title="LLM provider">
+        <option value="anthropic">Anthropic — claude-sonnet-4-6</option>
+        <option value="openai">OpenAI — gpt-4o</option>
+        <option value="gemini">Google — gemini-2.0-flash</option>
+      </select>
+    </header>
+    <main id="log"></main>
+    <form id="form">
+      <textarea id="input" placeholder="Ask about Hawaii weather, surf, trails…" rows="1"></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+
+    <script type="module">
+      const log = document.getElementById('log');
+      const form = document.getElementById('form');
+      const input = document.getElementById('input');
+      const send = document.getElementById('send');
+      const providerEl = document.getElementById('provider');
+
+      // history stores {role, content: string} — provider-agnostic
+      const history = [];
+
+      function add(cls, text) {
+        const div = document.createElement('div');
+        div.className = `msg ${cls}`;
+        div.textContent = text;
+        log.appendChild(div);
+        div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
+
+      function renderBlocks(blocks) {
+        let assistantText = '';
+        for (const b of blocks) {
+          if (b.type === 'text') {
+            assistantText += (assistantText ? '\n' : '') + b.text;
+          } else if (b.type === 'tool_use') {
+            add('tool', `→ ${b.name}(${JSON.stringify(b.input)})`);
+          } else if (b.type === 'tool_result') {
+            const preview = b.content.length > 600
+              ? b.content.slice(0, 600) + '…'
+              : b.content;
+            add('tool', `← ${preview}`);
+          }
+        }
+        if (assistantText) add('assistant', assistantText);
+        return assistantText;
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        send.disabled = true;
+        add('user', text);
+        history.push({ role: 'user', content: text });
+
+        try {
+          const r = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: providerEl.value, messages: history }),
+          });
+          const data = await r.json();
+          if (!r.ok) {
+            add('error', `Error: ${data.error || r.statusText}`);
+            history.pop(); // remove the failed user message
+          } else {
+            const assistantText = renderBlocks(data.content || []);
+            if (assistantText) history.push({ role: 'assistant', content: assistantText });
+          }
+        } catch (err) {
+          add('error', `Network error: ${err.message}`);
+          history.pop();
+        } finally {
+          send.disabled = false;
+          input.focus();
+        }
+      });
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          form.requestSubmit();
+        }
+      });
+    </script>
+  </body>
+</html>
