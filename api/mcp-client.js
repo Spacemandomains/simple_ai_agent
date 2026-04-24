@@ -11,7 +11,7 @@ async function post(url, method, params, id, paymentToken) {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(50_000),
   });
 
   if (!res.ok) {
