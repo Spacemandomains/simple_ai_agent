@@ -4,7 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MCP Test Agent</title>
-    <script src="https://js.stripe.com/v3/"></script>
     <style>
       :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
@@ -16,13 +15,11 @@
       }
       @media (prefers-color-scheme: dark) {
         body { background: #14161a; color: #eee; }
-        .msg.user { background: #1e3a5f; }
+        .msg.user      { background: #1e3a5f; }
         .msg.assistant { background: #23262d; }
-        .msg.tool { background: #2a1f0a; color: #f0d090; }
+        .msg.tool      { background: #2a1f0a; color: #f0d090; }
         textarea, input, select { background: #23262d; color: #eee; border-color: #444; }
         .config { background: #1c1f25; border-color: #333; }
-        .modal-card { background: #23262d; }
-        #cardElementWrapper { background: #2a2d35; border-color: #555; }
       }
       header {
         padding: 12px 20px;
@@ -68,11 +65,10 @@
         line-height: 1.45;
         font-size: 14px;
       }
-      .msg.user     { background: #dbeafe; align-self: flex-end; max-width: 80%; }
+      .msg.user      { background: #dbeafe; align-self: flex-end; max-width: 80%; }
       .msg.assistant { background: #fff; align-self: flex-start; max-width: 90%; border: 1px solid #0001; }
-      .msg.tool     { background: #fff7e6; font-family: ui-monospace, monospace; font-size: 12px; }
-      .msg.error    { background: #fee; color: #900; }
-      .msg.system   { background: #f0f0f0; color: #666; font-size: 12px; align-self: center; }
+      .msg.tool      { background: #fff7e6; font-family: ui-monospace, monospace; font-size: 12px; }
+      .msg.error     { background: #fee; color: #900; }
       form {
         position: sticky;
         bottom: 0;
@@ -102,62 +98,8 @@
         font-weight: 600;
         cursor: pointer;
         font: inherit;
-        white-space: nowrap;
       }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
-      button.secondary {
-        background: transparent;
-        color: #666;
-        border: 1px solid #ccc;
-      }
-
-      /* Payment modal */
-      .modal-overlay {
-        display: none;
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.5);
-        z-index: 100;
-        align-items: center;
-        justify-content: center;
-      }
-      .modal-overlay.visible { display: flex; }
-      .modal-card {
-        background: #fff;
-        border-radius: 12px;
-        padding: 28px;
-        width: 100%;
-        max-width: 420px;
-        margin: 20px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-      }
-      .modal-card h2 { margin: 0 0 6px; font-size: 18px; }
-      .modal-card .price {
-        font-size: 28px;
-        font-weight: 700;
-        margin: 8px 0 4px;
-        color: #1a73e8;
-      }
-      .modal-card .tool-name {
-        font-size: 13px;
-        color: #888;
-        margin-bottom: 20px;
-      }
-      #cardElementWrapper {
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 8px;
-        background: #fafafa;
-      }
-      #cardError {
-        color: #c00;
-        font-size: 13px;
-        min-height: 20px;
-        margin-bottom: 12px;
-      }
-      .modal-actions { display: flex; gap: 8px; }
-      .modal-actions button { flex: 1; padding: 10px; }
     </style>
   </head>
   <body>
@@ -173,65 +115,27 @@
     <div class="config">
       <label>MCP Server URL</label>
       <input type="text" id="mcpUrl" placeholder="https://your-mcp-server.vercel.app/mcp" />
-      <label>Payment Token</label>
-      <input type="password" id="paymentToken" placeholder="pi_... (auto-filled after payment)" style="max-width:220px" />
+      <label>Payment Method</label>
+      <input type="password" id="paymentMethod" placeholder="pm_... (Stripe payment method)" style="max-width:240px" />
     </div>
 
     <main id="log"></main>
 
     <form id="form">
-      <textarea id="input" placeholder="Ask anything — the agent will use your MCP server's tools to answer" rows="1"></textarea>
+      <textarea id="input" placeholder="Give the agent a task…" rows="1"></textarea>
       <button id="send" type="submit">Send</button>
     </form>
 
-    <!-- Stripe payment modal -->
-    <div class="modal-overlay" id="paymentModal">
-      <div class="modal-card">
-        <h2>Payment Required</h2>
-        <div class="price" id="modalPrice"></div>
-        <div class="tool-name" id="modalTool"></div>
-        <div id="cardElementWrapper">
-          <div id="cardElement"></div>
-        </div>
-        <div id="cardError"></div>
-        <div class="modal-actions">
-          <button class="secondary" id="cancelPayBtn">Cancel</button>
-          <button id="confirmPayBtn">Pay now</button>
-        </div>
-      </div>
-    </div>
-
     <script type="module">
-      const log        = document.getElementById('log');
-      const form       = document.getElementById('form');
-      const input      = document.getElementById('input');
-      const send       = document.getElementById('send');
-      const providerEl = document.getElementById('provider');
-      const mcpUrlEl   = document.getElementById('mcpUrl');
-      const tokenEl    = document.getElementById('paymentToken');
-      const modal      = document.getElementById('paymentModal');
-      const modalPrice = document.getElementById('modalPrice');
-      const modalTool  = document.getElementById('modalTool');
-      const cardError  = document.getElementById('cardError');
-      const confirmBtn = document.getElementById('confirmPayBtn');
-      const cancelBtn  = document.getElementById('cancelPayBtn');
+      const log          = document.getElementById('log');
+      const form         = document.getElementById('form');
+      const input        = document.getElementById('input');
+      const send         = document.getElementById('send');
+      const providerEl   = document.getElementById('provider');
+      const mcpUrlEl     = document.getElementById('mcpUrl');
+      const paymentEl    = document.getElementById('paymentMethod');
 
       const history = [];
-      let stripe = null;
-      let cardElement = null;
-      let pendingRetry = null; // last message text, replayed after payment
-
-      // Load Stripe publishable key from backend
-      async function initStripe() {
-        try {
-          const r = await fetch('/api/config');
-          const { stripePublishableKey } = await r.json();
-          if (stripePublishableKey && window.Stripe) {
-            stripe = Stripe(stripePublishableKey);
-          }
-        } catch {}
-      }
-      initStripe();
 
       function add(cls, text) {
         const div = document.createElement('div');
@@ -239,7 +143,6 @@
         div.textContent = text;
         log.appendChild(div);
         div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        return div;
       }
 
       function renderBlocks(blocks) {
@@ -258,84 +161,28 @@
         return assistantText;
       }
 
-      // ── Payment flow ──────────────────────────────────────────────────────────
-      function showPaymentModal(paymentData, retryText) {
-        const pi = paymentData.payment_methods?.stripe_per_call?.payment_intent;
-        const clientSecret = pi?.client_secret;
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
 
-        if (!stripe || !clientSecret) {
-          add('error',
-            `Payment required for "${paymentData.tool}" (${paymentData.price_usd}). ` +
-            `Pay intent ${pi?.id || '?'} in Stripe dashboard, then paste the ID into the Payment Token field and resend.`
-          );
-          return;
-        }
+        const mcpUrl = mcpUrlEl.value.trim();
+        if (!mcpUrl) { add('error', 'Enter an MCP Server URL above.'); return; }
 
-        modalPrice.textContent = paymentData.price_usd || '?';
-        modalTool.textContent  = `Tool: ${paymentData.tool || 'unknown'}`;
-        cardError.textContent  = '';
-        confirmBtn.disabled    = false;
-        confirmBtn.textContent = 'Pay now';
-
-        // Mount fresh card element each time
-        if (cardElement) cardElement.destroy();
-        const elements = stripe.elements();
-        cardElement = elements.create('card', { style: { base: { fontSize: '15px' } } });
-        document.getElementById('cardElement').innerHTML = '';
-        cardElement.mount('#cardElement');
-        cardElement.on('change', (e) => { cardError.textContent = e.error?.message || ''; });
-
-        pendingRetry = { clientSecret, paymentIntentId: pi.id, retryText };
-        modal.classList.add('visible');
-      }
-
-      confirmBtn.addEventListener('click', async () => {
-        if (!pendingRetry || !cardElement) return;
-        confirmBtn.disabled    = true;
-        confirmBtn.textContent = 'Processing…';
-        cardError.textContent  = '';
-
-        const { error, paymentIntent } = await stripe.confirmCardPayment(
-          pendingRetry.clientSecret,
-          { payment_method: { card: cardElement } }
-        );
-
-        if (error) {
-          cardError.textContent  = error.message;
-          confirmBtn.disabled    = false;
-          confirmBtn.textContent = 'Pay now';
-          return;
-        }
-
-        // Payment succeeded — populate token and auto-retry
-        tokenEl.value = paymentIntent.id;
-        modal.classList.remove('visible');
-        add('system', `Payment confirmed (${paymentIntent.id}). Retrying…`);
-
-        const text = pendingRetry.retryText;
-        pendingRetry = null;
-        await sendMessage(text);
-      });
-
-      cancelBtn.addEventListener('click', () => {
-        modal.classList.remove('visible');
-        pendingRetry = null;
-        send.disabled = false;
-      });
-
-      // ── Chat flow ─────────────────────────────────────────────────────────────
-      async function sendMessage(text) {
+        input.value = '';
         send.disabled = true;
+        add('user', text);
+        history.push({ role: 'user', content: text });
 
         try {
           const r = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              provider:     providerEl.value,
-              messages:     history,
-              mcpUrl:       mcpUrlEl.value.trim(),
-              paymentToken: tokenEl.value.trim() || undefined,
+              provider:        providerEl.value,
+              messages:        history,
+              mcpUrl,
+              paymentMethodId: paymentEl.value.trim() || undefined,
             }),
           });
 
@@ -348,9 +195,11 @@
           }
 
           if (data.payment_required) {
-            // Pause the conversation, show Stripe UI
+            add('error',
+              `Payment required for tool "${data.tool}" (${data.price_usd}). ` +
+              `Enter a Stripe Payment Method (pm_...) above to enable automatic payments.`
+            );
             history.pop();
-            showPaymentModal(data, text);
             return;
           }
 
@@ -360,23 +209,9 @@
           add('error', `Network error: ${err.message}`);
           history.pop();
         } finally {
-          if (!modal.classList.contains('visible')) send.disabled = false;
+          send.disabled = false;
           input.focus();
         }
-      }
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const text = input.value.trim();
-        if (!text) return;
-
-        const mcpUrl = mcpUrlEl.value.trim();
-        if (!mcpUrl) { add('error', 'Enter an MCP Server URL above.'); return; }
-
-        input.value = '';
-        add('user', text);
-        history.push({ role: 'user', content: text });
-        await sendMessage(text);
       });
 
       input.addEventListener('keydown', (e) => {

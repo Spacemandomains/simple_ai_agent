@@ -11,10 +11,10 @@ const SYSTEM =
 
 // Confirm a Stripe payment intent server-side using saved credentials.
 // Returns the confirmed payment intent ID, or null if not configured / needs frontend.
-async function autoConfirmPayment(paymentData) {
+async function autoConfirmPayment(paymentData, paymentMethodId) {
   const secretKey = process.env.STRIPE_SECRET_KEY;
-  const paymentMethodId = process.env.STRIPE_PAYMENT_METHOD_ID;
-  if (!secretKey || !paymentMethodId) return null;
+  const pmId = paymentMethodId || process.env.STRIPE_PAYMENT_METHOD_ID;
+  if (!secretKey || !pmId) return null;
 
   const pi = paymentData.payment_methods?.stripe_per_call?.payment_intent;
   if (!pi?.id) return null;
@@ -26,7 +26,7 @@ async function autoConfirmPayment(paymentData) {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({
-      payment_method: paymentMethodId,
+      payment_method: pmId,
       off_session: 'true',
     }).toString(),
     signal: AbortSignal.timeout(15_000),
@@ -43,13 +43,13 @@ async function autoConfirmPayment(paymentData) {
 
 // Invoke a tool, auto-paying any 402 if server credentials are configured.
 // Returns { ok, content } on success or { ok: false, paymentRequired } for frontend fallback.
-async function callTool(mcpUrl, name, args, paymentToken) {
+async function callTool(mcpUrl, name, args, paymentToken, paymentMethodId) {
   try {
     return { ok: true, content: await invokeTool(mcpUrl, name, args, paymentToken) };
   } catch (err) {
     if (!err.paymentRequired) throw err;
 
-    const confirmedToken = await autoConfirmPayment(err.paymentRequired);
+    const confirmedToken = await autoConfirmPayment(err.paymentRequired, paymentMethodId);
     if (confirmedToken) {
       try {
         return { ok: true, content: await invokeTool(mcpUrl, name, args, confirmedToken) };
@@ -64,7 +64,7 @@ async function callTool(mcpUrl, name, args, paymentToken) {
 }
 
 // ── Anthropic ─────────────────────────────────────────────────────────────────
-async function handleAnthropic(messages, mcpUrl, paymentToken) {
+async function handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -98,7 +98,7 @@ async function handleAnthropic(messages, mcpUrl, paymentToken) {
     const toolResults = [];
     for (const tu of toolUses) {
       blocks.push({ type: 'tool_use', name: tu.name, input: tu.input });
-      const result = await callTool(mcpUrl, tu.name, tu.input, paymentToken);
+      const result = await callTool(mcpUrl, tu.name, tu.input, paymentToken, paymentMethodId);
       if (!result.ok) return { payment_required: true, ...result.paymentRequired };
       const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
       blocks.push({ type: 'tool_result', name: tu.name, content: text });
@@ -111,7 +111,7 @@ async function handleAnthropic(messages, mcpUrl, paymentToken) {
 }
 
 // ── OpenAI ────────────────────────────────────────────────────────────────────
-async function handleOpenAI(messages, mcpUrl, paymentToken) {
+async function handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -147,7 +147,7 @@ async function handleOpenAI(messages, mcpUrl, paymentToken) {
     for (const tc of msg.tool_calls) {
       const args = JSON.parse(tc.function.arguments || '{}');
       blocks.push({ type: 'tool_use', name: tc.function.name, input: args });
-      const result = await callTool(mcpUrl, tc.function.name, args, paymentToken);
+      const result = await callTool(mcpUrl, tc.function.name, args, paymentToken, paymentMethodId);
       if (!result.ok) return { payment_required: true, ...result.paymentRequired };
       const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
       blocks.push({ type: 'tool_result', name: tc.function.name, content: text });
@@ -159,7 +159,7 @@ async function handleOpenAI(messages, mcpUrl, paymentToken) {
 }
 
 // ── Gemini ────────────────────────────────────────────────────────────────────
-async function handleGemini(messages, mcpUrl, paymentToken) {
+async function handleGemini(messages, mcpUrl, paymentToken, paymentMethodId) {
   const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -197,7 +197,7 @@ async function handleGemini(messages, mcpUrl, paymentToken) {
         hasFunctionCall = true;
         const { name, args } = part.functionCall;
         blocks.push({ type: 'tool_use', name, input: args });
-        const result = await callTool(mcpUrl, name, args, paymentToken);
+        const result = await callTool(mcpUrl, name, args, paymentToken, paymentMethodId);
         if (!result.ok) return { payment_required: true, ...result.paymentRequired };
         const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
         blocks.push({ type: 'tool_result', name, content: text });
@@ -229,8 +229,9 @@ export default async function handler(req, res) {
   const mcpUrl = payload.mcpUrl;
   if (!mcpUrl) return res.status(400).json({ error: 'Missing mcpUrl' });
 
-  const paymentToken = payload.paymentToken || undefined;
-  const provider = payload.provider || 'anthropic';
+  const paymentToken    = payload.paymentToken    || undefined;
+  const paymentMethodId = payload.paymentMethodId || undefined;
+  const provider        = payload.provider        || 'anthropic';
 
   const keyMap = {
     anthropic: 'ANTHROPIC_API_KEY',
@@ -244,9 +245,9 @@ export default async function handler(req, res) {
 
   try {
     let result;
-    if (provider === 'anthropic') result = await handleAnthropic(messages, mcpUrl, paymentToken);
-    else if (provider === 'openai') result = await handleOpenAI(messages, mcpUrl, paymentToken);
-    else result = await handleGemini(messages, mcpUrl, paymentToken);
+    if (provider === 'anthropic') result = await handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId);
+    else if (provider === 'openai') result = await handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId);
+    else result = await handleGemini(messages, mcpUrl, paymentToken, paymentMethodId);
 
     res.status(200).json(result);
   } catch (err) {
