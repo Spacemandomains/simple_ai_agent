@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { discoverTools, invokeTool } from './mcp-client.js';
+import { confirmPayment } from '../lib/wallet.js';
 
 export const config = { runtime: 'nodejs' };
 
@@ -9,62 +10,61 @@ const SYSTEM =
   'You are a helpful assistant with access to tools provided by an MCP server. ' +
   'Use the available tools to answer questions accurately and concisely.';
 
-// Confirm a Stripe payment intent server-side using saved credentials.
-// Returns the confirmed payment intent ID, or null if not configured / needs frontend.
-async function autoConfirmPayment(paymentData, paymentMethodId) {
-  const secretKey = process.env.STRIPE_SECRET_KEY;
-  const pmId = paymentMethodId || process.env.STRIPE_PAYMENT_METHOD_ID;
-  if (!secretKey || !pmId) return null;
-
+// Confirm a 402 payment intent through the wallet (enforces limits).
+// Returns the confirmed payment_intent_id or throws with structured wallet error.
+async function payViaWallet(paymentData) {
   const pi = paymentData.payment_methods?.stripe_per_call?.payment_intent;
-  if (!pi?.id) return null;
-
-  const r = await fetch(`https://api.stripe.com/v1/payment_intents/${pi.id}/confirm`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      payment_method: pmId,
-      off_session: 'true',
-    }).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    throw new Error(`Stripe: ${err.error?.message || `HTTP ${r.status}`}`);
+  if (!pi?.id) {
+    const err = new Error('402 response contained no Stripe payment_intent id');
+    err.walletError = 'NO_PAYMENT_INTENT';
+    throw err;
   }
 
-  const intent = await r.json();
-  return intent.status === 'succeeded' ? intent.id : null;
+  const result = await confirmPayment({
+    paymentIntentId: pi.id,
+    metadata: { tool: paymentData.tool || 'unknown' },
+  });
+  return result.payment_intent_id;
 }
 
-// Invoke a tool, auto-paying any 402 if server credentials are configured.
-// Returns { ok, content } on success or { ok: false, paymentRequired } for frontend fallback.
-async function callTool(mcpUrl, name, args, paymentToken, paymentMethodId) {
+// Invoke a tool, paying any 402 through the wallet.
+// Returns { ok, content } or { ok: false, walletError } / { ok: false, paymentRequired }.
+async function callTool(mcpUrl, name, args, paymentToken) {
   try {
     return { ok: true, content: await invokeTool(mcpUrl, name, args, paymentToken) };
   } catch (err) {
     if (!err.paymentRequired) throw err;
 
-    const confirmedToken = await autoConfirmPayment(err.paymentRequired, paymentMethodId);
-    if (confirmedToken) {
-      try {
-        return { ok: true, content: await invokeTool(mcpUrl, name, args, confirmedToken) };
-      } catch (retryErr) {
-        if (retryErr.paymentRequired) return { ok: false, paymentRequired: retryErr.paymentRequired };
-        throw retryErr;
-      }
+    let confirmedToken;
+    try {
+      confirmedToken = await payViaWallet(err.paymentRequired);
+    } catch (walletErr) {
+      return {
+        ok: false,
+        walletError: {
+          code:    walletErr.code || walletErr.walletError || 'WALLET_ERROR',
+          message: walletErr.message,
+          tool:    err.paymentRequired.tool,
+          price:   err.paymentRequired.price_usd,
+          daily_spend_cents:    walletErr.daily_spend_cents,
+          daily_limit_cents:    walletErr.daily_limit_cents,
+          per_call_limit_cents: walletErr.per_call_limit_cents,
+          amount_cents:         walletErr.amount_cents,
+        },
+      };
     }
 
-    return { ok: false, paymentRequired: err.paymentRequired };
+    try {
+      return { ok: true, content: await invokeTool(mcpUrl, name, args, confirmedToken) };
+    } catch (retryErr) {
+      if (retryErr.paymentRequired) return { ok: false, paymentRequired: retryErr.paymentRequired };
+      throw retryErr;
+    }
   }
 }
 
 // ── Anthropic ─────────────────────────────────────────────────────────────────
-async function handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId) {
+async function handleAnthropic(messages, mcpUrl, paymentToken) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -98,8 +98,8 @@ async function handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId) 
     const toolResults = [];
     for (const tu of toolUses) {
       blocks.push({ type: 'tool_use', name: tu.name, input: tu.input });
-      const result = await callTool(mcpUrl, tu.name, tu.input, paymentToken, paymentMethodId);
-      if (!result.ok) return { payment_required: true, ...result.paymentRequired };
+      const result = await callTool(mcpUrl, tu.name, tu.input, paymentToken);
+      if (!result.ok) return finalizeFailure(result, blocks, mcpTools.length);
       const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
       blocks.push({ type: 'tool_result', name: tu.name, content: text });
       toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: text });
@@ -111,7 +111,7 @@ async function handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId) 
 }
 
 // ── OpenAI ────────────────────────────────────────────────────────────────────
-async function handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId) {
+async function handleOpenAI(messages, mcpUrl, paymentToken) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -147,8 +147,8 @@ async function handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId) {
     for (const tc of msg.tool_calls) {
       const args = JSON.parse(tc.function.arguments || '{}');
       blocks.push({ type: 'tool_use', name: tc.function.name, input: args });
-      const result = await callTool(mcpUrl, tc.function.name, args, paymentToken, paymentMethodId);
-      if (!result.ok) return { payment_required: true, ...result.paymentRequired };
+      const result = await callTool(mcpUrl, tc.function.name, args, paymentToken);
+      if (!result.ok) return finalizeFailure(result, blocks, mcpTools.length);
       const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
       blocks.push({ type: 'tool_result', name: tc.function.name, content: text });
       msgs.push({ role: 'tool', tool_call_id: tc.id, content: text });
@@ -159,7 +159,7 @@ async function handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId) {
 }
 
 // ── Gemini ────────────────────────────────────────────────────────────────────
-async function handleGemini(messages, mcpUrl, paymentToken, paymentMethodId) {
+async function handleGemini(messages, mcpUrl, paymentToken) {
   const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
   const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
@@ -197,8 +197,8 @@ async function handleGemini(messages, mcpUrl, paymentToken, paymentMethodId) {
         hasFunctionCall = true;
         const { name, args } = part.functionCall;
         blocks.push({ type: 'tool_use', name, input: args });
-        const result = await callTool(mcpUrl, name, args, paymentToken, paymentMethodId);
-        if (!result.ok) return { payment_required: true, ...result.paymentRequired };
+        const result = await callTool(mcpUrl, name, args, paymentToken);
+        if (!result.ok) return finalizeFailure(result, blocks, mcpTools.length);
         const text = result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
         blocks.push({ type: 'tool_result', name, content: text });
         fnResponses.push({ functionResponse: { name, response: { output: text } } });
@@ -210,6 +210,13 @@ async function handleGemini(messages, mcpUrl, paymentToken, paymentMethodId) {
   }
 
   return { content: blocks, tools: mcpTools.length };
+}
+
+function finalizeFailure(result, blocks, toolsCount) {
+  if (result.walletError) {
+    return { content: blocks, tools: toolsCount, wallet_error: result.walletError };
+  }
+  return { content: blocks, tools: toolsCount, payment_required: true, ...result.paymentRequired };
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -229,14 +236,13 @@ export default async function handler(req, res) {
   const mcpUrl = payload.mcpUrl;
   if (!mcpUrl) return res.status(400).json({ error: 'Missing mcpUrl' });
 
-  const paymentToken    = payload.paymentToken    || undefined;
-  const paymentMethodId = payload.paymentMethodId || undefined;
-  const provider        = payload.provider        || 'anthropic';
+  const paymentToken = payload.paymentToken || undefined;
+  const provider     = payload.provider     || 'anthropic';
 
   const keyMap = {
     anthropic: 'ANTHROPIC_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    gemini: 'GOOGLE_API_KEY',
+    openai:    'OPENAI_API_KEY',
+    gemini:    'GOOGLE_API_KEY',
   };
 
   if (!keyMap[provider]) return res.status(400).json({ error: `Unknown provider: ${provider}` });
@@ -245,9 +251,9 @@ export default async function handler(req, res) {
 
   try {
     let result;
-    if (provider === 'anthropic') result = await handleAnthropic(messages, mcpUrl, paymentToken, paymentMethodId);
-    else if (provider === 'openai') result = await handleOpenAI(messages, mcpUrl, paymentToken, paymentMethodId);
-    else result = await handleGemini(messages, mcpUrl, paymentToken, paymentMethodId);
+    if (provider === 'anthropic') result = await handleAnthropic(messages, mcpUrl, paymentToken);
+    else if (provider === 'openai') result = await handleOpenAI(messages, mcpUrl, paymentToken);
+    else result = await handleGemini(messages, mcpUrl, paymentToken);
 
     res.status(200).json(result);
   } catch (err) {

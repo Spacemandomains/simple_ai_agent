@@ -19,7 +19,8 @@
         .msg.assistant { background: #23262d; }
         .msg.tool      { background: #2a1f0a; color: #f0d090; }
         textarea, input, select { background: #23262d; color: #eee; border-color: #444; }
-        .config { background: #1c1f25; border-color: #333; }
+        .config, .wallet { background: #1c1f25; border-color: #333; }
+        .wallet .bar { background: #333; }
       }
       header {
         padding: 12px 20px;
@@ -29,20 +30,22 @@
         gap: 12px;
       }
       header h1 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
-      select, input[type="text"], input[type="password"] {
+      select, input[type="text"] {
         padding: 6px 10px;
         border-radius: 6px;
         border: 1px solid #ccc;
         font: inherit;
         font-size: 13px;
       }
-      .config {
+      .config, .wallet {
         max-width: 760px;
         margin: 12px auto 0;
         padding: 10px 20px;
         background: #fff;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
+      }
+      .config {
         display: flex;
         gap: 8px;
         align-items: center;
@@ -50,6 +53,27 @@
       }
       .config label { font-size: 12px; color: #888; white-space: nowrap; }
       .config input { flex: 1; min-width: 160px; }
+
+      .wallet {
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .wallet .label { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+      .wallet .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+      .wallet .bar {
+        flex: 1;
+        min-width: 120px;
+        height: 8px;
+        background: #eee;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .wallet .fill { height: 100%; background: #1a73e8; transition: width 0.3s; }
+      .wallet .fill.over { background: #d93025; }
+
       main {
         max-width: 760px;
         margin: 12px auto 0;
@@ -69,6 +93,7 @@
       .msg.assistant { background: #fff; align-self: flex-start; max-width: 90%; border: 1px solid #0001; }
       .msg.tool      { background: #fff7e6; font-family: ui-monospace, monospace; font-size: 12px; }
       .msg.error     { background: #fee; color: #900; }
+      .msg.system    { background: transparent; color: #888; font-size: 12px; align-self: center; }
       form {
         position: sticky;
         bottom: 0;
@@ -115,8 +140,14 @@
     <div class="config">
       <label>MCP Server URL</label>
       <input type="text" id="mcpUrl" placeholder="https://your-mcp-server.vercel.app/mcp" />
-      <label>Payment Method</label>
-      <input type="password" id="paymentMethod" placeholder="pm_... (Stripe payment method)" style="max-width:240px" />
+    </div>
+
+    <div class="wallet" id="wallet" style="display:none">
+      <span class="label">Wallet</span>
+      <span><span class="value" id="walletSpent">–</span> / <span id="walletLimit">–</span></span>
+      <div class="bar"><div class="fill" id="walletFill" style="width:0%"></div></div>
+      <span class="label">Per-call cap</span>
+      <span class="value" id="walletCap">–</span>
     </div>
 
     <main id="log"></main>
@@ -127,15 +158,20 @@
     </form>
 
     <script type="module">
-      const log          = document.getElementById('log');
-      const form         = document.getElementById('form');
-      const input        = document.getElementById('input');
-      const send         = document.getElementById('send');
-      const providerEl   = document.getElementById('provider');
-      const mcpUrlEl     = document.getElementById('mcpUrl');
-      const paymentEl    = document.getElementById('paymentMethod');
+      const log        = document.getElementById('log');
+      const form       = document.getElementById('form');
+      const input      = document.getElementById('input');
+      const send       = document.getElementById('send');
+      const providerEl = document.getElementById('provider');
+      const mcpUrlEl   = document.getElementById('mcpUrl');
+      const walletBox  = document.getElementById('wallet');
+      const walletSpent = document.getElementById('walletSpent');
+      const walletLimit = document.getElementById('walletLimit');
+      const walletCap   = document.getElementById('walletCap');
+      const walletFill  = document.getElementById('walletFill');
 
       const history = [];
+      const fmtUSD = (cents) => `$${(cents / 100).toFixed(2)}`;
 
       function add(cls, text) {
         const div = document.createElement('div');
@@ -161,6 +197,22 @@
         return assistantText;
       }
 
+      async function refreshWallet() {
+        try {
+          const r = await fetch('/api/wallet/status');
+          if (!r.ok) return;
+          const s = await r.json();
+          walletSpent.textContent = fmtUSD(s.daily_spend_cents);
+          walletLimit.textContent = fmtUSD(s.daily_limit_cents);
+          walletCap.textContent   = fmtUSD(s.per_call_limit_cents);
+          const pct = Math.min(100, (s.daily_spend_cents / s.daily_limit_cents) * 100);
+          walletFill.style.width = `${pct}%`;
+          walletFill.classList.toggle('over', pct >= 100);
+          walletBox.style.display = '';
+        } catch {}
+      }
+      refreshWallet();
+
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const text = input.value.trim();
@@ -179,10 +231,9 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              provider:        providerEl.value,
-              messages:        history,
+              provider: providerEl.value,
+              messages: history,
               mcpUrl,
-              paymentMethodId: paymentEl.value.trim() || undefined,
             }),
           });
 
@@ -194,23 +245,30 @@
             return;
           }
 
-          if (data.payment_required) {
-            add('error',
-              `Payment required for tool "${data.tool}" (${data.price_usd}). ` +
-              `Enter a Stripe Payment Method (pm_...) above to enable automatic payments.`
-            );
-            history.pop();
-            return;
-          }
+          renderBlocks(data.content || []);
 
-          const assistantText = renderBlocks(data.content || []);
-          if (assistantText) history.push({ role: 'assistant', content: assistantText });
+          if (data.wallet_error) {
+            const w = data.wallet_error;
+            const lines = [`Wallet blocked payment for "${w.tool || '?'}" (${w.price || '?'}):`, `  ${w.code}: ${w.message}`];
+            if (w.daily_spend_cents !== undefined) {
+              lines.push(`  Daily: ${fmtUSD(w.daily_spend_cents)} spent / ${fmtUSD(w.daily_limit_cents)} limit`);
+            }
+            add('error', lines.join('\n'));
+            history.pop();
+          } else if (data.payment_required) {
+            add('error', `Payment required for "${data.tool}" (${data.price_usd}) but wallet could not auto-pay.`);
+            history.pop();
+          } else {
+            const lastText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+            if (lastText) history.push({ role: 'assistant', content: lastText });
+          }
         } catch (err) {
           add('error', `Network error: ${err.message}`);
           history.pop();
         } finally {
           send.disabled = false;
           input.focus();
+          refreshWallet();
         }
       });
 
