@@ -154,6 +154,36 @@ function isAuthenticationRequired(resp) {
   return parsed?.error === 'authentication_required';
 }
 
+function isToolPaymentRequired(parsed) {
+  return parsed?.status === 'payment_required' && parsed?.payment_intent_id;
+}
+
+function toWalletPaymentRequired(parsed, toolName) {
+  return {
+    tool: parsed.topup_tool || toolName,
+    price_usd: parsed.amount_usd,
+    amount_cents: parsed.amount_cents,
+    currency: parsed.currency || 'usd',
+    payment_methods: {
+      stripe_per_call: {
+        payment_intent: {
+          id: parsed.payment_intent_id,
+          client_secret: parsed.client_secret,
+        },
+        publishable_key: parsed.publishable_key,
+      },
+    },
+    raw: parsed,
+  };
+}
+
+function throwIfToolPaymentRequired(parsed, toolName) {
+  if (!isToolPaymentRequired(parsed)) return;
+  const err = new Error('Payment required');
+  err.paymentRequired = toWalletPaymentRequired(parsed, toolName);
+  throw err;
+}
+
 async function post(url, method, params, id, paymentToken, accountKey) {
   const headers = {
     'Content-Type': 'application/json',
@@ -212,13 +242,14 @@ async function registerAgent(url, paymentToken) {
 
 async function processToolResponse(url, toolName, resp) {
   const parsed = parseToolJson(resp);
-  if (!parsed) return;
+  if (!parsed) return parsed;
 
   if (toolName === 'register_agent' && parsed.api_key) {
     await saveAccount(url, parsed);
   }
 
   await recordBalanceSnapshot(url, toolName, parsed);
+  return parsed;
 }
 
 export async function discoverTools(url, paymentToken) {
@@ -244,7 +275,8 @@ export async function invokeTool(url, name, args, paymentToken) {
   let resp = await callRawTool(url, name, args, paymentToken, accountKey);
 
   if (name === 'register_agent') {
-    await processToolResponse(url, name, resp);
+    const parsed = await processToolResponse(url, name, resp);
+    throwIfToolPaymentRequired(parsed, name);
     return resp?.result?.content ?? [];
   }
 
@@ -257,6 +289,8 @@ export async function invokeTool(url, name, args, paymentToken) {
     }
   }
 
-  await processToolResponse(url, name, resp);
+  const parsed = await processToolResponse(url, name, resp);
+  throwIfToolPaymentRequired(parsed, name);
+
   return resp?.result?.content ?? [];
 }
