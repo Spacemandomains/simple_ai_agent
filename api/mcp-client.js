@@ -5,6 +5,13 @@ async function post(url, method, params, id, paymentToken) {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
   };
+
+  // Sends your MCP API key to protected MCP servers.
+  // Add MCP_API_KEY in Vercel Environment Variables.
+  if (process.env.MCP_API_KEY) {
+    headers.Authorization = `Bearer ${process.env.MCP_API_KEY}`;
+  }
+
   if (paymentToken) headers['X-Payment-Token'] = paymentToken;
 
   const res = await fetch(url, {
@@ -47,11 +54,19 @@ export async function discoverTools(url, paymentToken) {
     capabilities: {},
     clientInfo: { name: 'mcp-test-agent', version: '0.1.0' },
   }, 1, paymentToken);
+
   const resp = await post(url, 'tools/list', {}, 2, paymentToken);
   return resp?.result?.tools ?? [];
 }
 
 export async function invokeTool(url, name, args, paymentToken) {
-  const resp = await post(url, 'tools/call', { name, arguments: args ?? {} }, Date.now(), paymentToken);
+  const resp = await post(
+    url,
+    'tools/call',
+    { name, arguments: args ?? {} },
+    Date.now(),
+    paymentToken
+  );
+
   return resp?.result?.content ?? [];
 }
