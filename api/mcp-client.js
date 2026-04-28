@@ -13,6 +13,16 @@ function dollarsToCents(value) {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
 }
 
+function getAgentPaymentIdentity() {
+  return {
+    display_name: process.env.HAWAII_CONDITIONS_AGENT_NAME || DEFAULT_AGENT_DISPLAY_NAME,
+    agent_id: process.env.AGENT_ID || process.env.VERCEL_PROJECT_PRODUCTION_URL || 'simple-ai-agent',
+    payment_provider: process.env.PAYMENT_PROVIDER || 'stripe',
+    stripe_customer_id: process.env.STRIPE_CUSTOMER_ID || undefined,
+    provider_customer_id: process.env.PAYMENT_PROVIDER_CUSTOMER_ID || process.env.STRIPE_CUSTOMER_ID || undefined,
+  };
+}
+
 function normalizeBalanceCents(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   if (Number.isFinite(parsed.balance_cents)) return parsed.balance_cents;
@@ -37,6 +47,10 @@ async function ensureSchema() {
     )
   `;
 
+  await sql`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS agent_id TEXT`;
+  await sql`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS payment_provider TEXT`;
+  await sql`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS provider_customer_id TEXT`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_balance_history (
       id SERIAL PRIMARY KEY,
@@ -50,6 +64,10 @@ async function ensureSchema() {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `;
+
+  await sql`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS agent_id TEXT`;
+  await sql`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS payment_provider TEXT`;
+  await sql`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS provider_customer_id TEXT`;
 }
 
 async function getAccountFromDB(url) {
@@ -62,7 +80,11 @@ async function saveAccount(url, parsed) {
   await ensureSchema();
   if (!parsed?.api_key) return;
 
+  const identity = getAgentPaymentIdentity();
   const balanceCents = normalizeBalanceCents(parsed);
+  const stripeCustomerId = parsed.stripe_customer_id || identity.stripe_customer_id || null;
+  const providerCustomerId = parsed.provider_customer_id || identity.provider_customer_id || stripeCustomerId;
+
   await sql`
     INSERT INTO mcp_accounts (
       mcp_url,
@@ -70,6 +92,9 @@ async function saveAccount(url, parsed) {
       account_id,
       stripe_customer_id,
       display_name,
+      agent_id,
+      payment_provider,
+      provider_customer_id,
       last_balance_cents,
       last_balance_usd,
       updated_at
@@ -78,8 +103,11 @@ async function saveAccount(url, parsed) {
       ${url},
       ${parsed.api_key},
       ${parsed.account_id || null},
-      ${parsed.stripe_customer_id || null},
-      ${parsed.display_name || DEFAULT_AGENT_DISPLAY_NAME},
+      ${stripeCustomerId},
+      ${parsed.display_name || identity.display_name},
+      ${identity.agent_id},
+      ${identity.payment_provider},
+      ${providerCustomerId},
       ${balanceCents},
       ${parsed.balance_usd || null},
       NOW()
@@ -89,6 +117,9 @@ async function saveAccount(url, parsed) {
       account_id = COALESCE(EXCLUDED.account_id, mcp_accounts.account_id),
       stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, mcp_accounts.stripe_customer_id),
       display_name = COALESCE(EXCLUDED.display_name, mcp_accounts.display_name),
+      agent_id = COALESCE(EXCLUDED.agent_id, mcp_accounts.agent_id),
+      payment_provider = COALESCE(EXCLUDED.payment_provider, mcp_accounts.payment_provider),
+      provider_customer_id = COALESCE(EXCLUDED.provider_customer_id, mcp_accounts.provider_customer_id),
       last_balance_cents = COALESCE(EXCLUDED.last_balance_cents, mcp_accounts.last_balance_cents),
       last_balance_usd = COALESCE(EXCLUDED.last_balance_usd, mcp_accounts.last_balance_usd),
       updated_at = NOW()
@@ -102,12 +133,18 @@ async function recordBalanceSnapshot(url, toolName, parsed) {
 
   await ensureSchema();
   const existing = await getAccountFromDB(url);
+  const identity = getAgentPaymentIdentity();
+  const stripeCustomerId = parsed.stripe_customer_id || existing?.stripe_customer_id || identity.stripe_customer_id || null;
+  const providerCustomerId = parsed.provider_customer_id || existing?.provider_customer_id || identity.provider_customer_id || stripeCustomerId;
 
   await sql`
     INSERT INTO mcp_balance_history (
       mcp_url,
       account_id,
       stripe_customer_id,
+      agent_id,
+      payment_provider,
+      provider_customer_id,
       tool_name,
       balance_cents,
       balance_usd,
@@ -116,7 +153,10 @@ async function recordBalanceSnapshot(url, toolName, parsed) {
     VALUES (
       ${url},
       ${parsed.account_id || existing?.account_id || null},
-      ${parsed.stripe_customer_id || existing?.stripe_customer_id || null},
+      ${stripeCustomerId},
+      ${identity.agent_id},
+      ${identity.payment_provider},
+      ${providerCustomerId},
       ${toolName},
       ${balanceCents},
       ${parsed.balance_usd || null},
@@ -128,7 +168,10 @@ async function recordBalanceSnapshot(url, toolName, parsed) {
     UPDATE mcp_accounts
     SET
       account_id = COALESCE(${parsed.account_id || null}, account_id),
-      stripe_customer_id = COALESCE(${parsed.stripe_customer_id || null}, stripe_customer_id),
+      stripe_customer_id = COALESCE(${stripeCustomerId}, stripe_customer_id),
+      agent_id = COALESCE(${identity.agent_id}, agent_id),
+      payment_provider = COALESCE(${identity.payment_provider}, payment_provider),
+      provider_customer_id = COALESCE(${providerCustomerId}, provider_customer_id),
       last_balance_cents = COALESCE(${balanceCents}, last_balance_cents),
       last_balance_usd = COALESCE(${parsed.balance_usd || null}, last_balance_usd),
       updated_at = NOW()
@@ -229,7 +272,7 @@ async function callRawTool(url, name, args, paymentToken, accountKey) {
 }
 
 async function registerAgent(url, paymentToken) {
-  const resp = await callRawTool(url, 'register_agent', { display_name: DEFAULT_AGENT_DISPLAY_NAME }, paymentToken);
+  const resp = await callRawTool(url, 'register_agent', getAgentPaymentIdentity(), paymentToken);
   const parsed = parseToolJson(resp);
 
   if (parsed?.api_key) {
