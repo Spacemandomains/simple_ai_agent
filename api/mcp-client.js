@@ -209,6 +209,10 @@ function isToolPaymentRequired(parsed) {
   return parsed?.status === 'payment_required' && parsed?.payment_intent_id;
 }
 
+function isToolSetupRequired(parsed) {
+  return parsed?.status === 'setup_required' && parsed?.setup_intent_id && parsed?.client_secret;
+}
+
 function toWalletPaymentRequired(parsed, toolName) {
   return {
     tool: parsed.topup_tool || toolName,
@@ -228,8 +232,27 @@ function toWalletPaymentRequired(parsed, toolName) {
   };
 }
 
+function toWalletSetupRequired(parsed, toolName) {
+  return {
+    tool: toolName,
+    status: 'setup_required',
+    setup_intent_id: parsed.setup_intent_id,
+    client_secret: parsed.client_secret,
+    publishable_key: parsed.publishable_key,
+    stripe_customer_id: parsed.stripe_customer_id,
+    raw: parsed,
+  };
+}
+
 function throwIfToolPaymentRequired(parsed, toolName) {
+  if (isToolSetupRequired(parsed)) {
+    const err = new Error('Wallet setup required');
+    err.paymentRequired = toWalletSetupRequired(parsed, toolName);
+    throw err;
+  }
+
   if (!isToolPaymentRequired(parsed)) return;
+
   const err = new Error('Payment required');
   err.paymentRequired = toWalletPaymentRequired(parsed, toolName);
   throw err;
