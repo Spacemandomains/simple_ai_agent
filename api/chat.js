@@ -69,7 +69,7 @@ async function callTool(mcpUrl, name, args, paymentToken) {
 
     let confirmedToken;
     try {
-      confirmedToken = await payViaWallet(err.paymentRequired);
+          confirmedToken = await payViaWallet(err.paymentRequired);
         } catch (walletErr) {
       return {
         ok: false,
