@@ -23,6 +23,14 @@ function getAgentPaymentIdentity() {
   };
 }
 
+function withAgentPaymentIdentity(name, args = {}) {
+  if (name !== 'register_agent') return args;
+  return {
+    ...(args || {}),
+    ...getAgentPaymentIdentity(),
+  };
+}
+
 function normalizeBalanceCents(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   if (Number.isFinite(parsed.balance_cents)) return parsed.balance_cents;
@@ -268,7 +276,7 @@ async function post(url, method, params, id, paymentToken, accountKey) {
 }
 
 async function callRawTool(url, name, args, paymentToken, accountKey) {
-  return post(url, 'tools/call', { name, arguments: args ?? {} }, Date.now(), paymentToken, accountKey);
+  return post(url, 'tools/call', { name, arguments: withAgentPaymentIdentity(name, args) ?? {} }, Date.now(), paymentToken, accountKey);
 }
 
 async function registerAgent(url, paymentToken) {
