@@ -253,9 +253,26 @@ async function handleGemini(messages, mcpUrl, paymentToken) {
 
 function finalizeFailure(result, blocks, toolsCount) {
   if (result.walletError) {
-    return { content: blocks, tools: toolsCount, wallet_error: result.walletError };
+    blocks.push({
+      type: 'text',
+      text: JSON.stringify({
+        wallet_error: result.walletError,
+      }, null, 2),
+    });
+
+    return {
+      content: blocks,
+      tools: toolsCount,
+      wallet_error: result.walletError,
+    };
   }
-  return { content: blocks, tools: toolsCount, payment_required: true, ...result.paymentRequired };
+
+  return {
+    content: blocks,
+    tools: toolsCount,
+    payment_required: true,
+    ...result.paymentRequired,
+  };
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
