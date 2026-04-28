@@ -79,10 +79,8 @@ async function callTool(mcpUrl, name, args, paymentToken) {
           tool:    walletErr.tool || err.paymentRequired.tool,
           price:   walletErr.price || err.paymentRequired.price_usd,
           currency: walletErr.currency || err.paymentRequired.currency,
-
           setup_intent_id: walletErr.setup_intent_id,
           stripe_customer_id: walletErr.stripe_customer_id,
-
           payment_intent_id: walletErr.payment_intent_id,
           client_secret: walletErr.client_secret,
           publishable_key: walletErr.publishable_key,
