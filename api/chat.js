@@ -2,7 +2,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { discoverTools, invokeTool } from './mcp-client.js';
-import { confirmPayment } from '../lib/wallet.js';
 
 export const config = { runtime: 'nodejs' };
 
@@ -10,24 +9,39 @@ const SYSTEM =
   'You are a helpful assistant with access to tools provided by an MCP server. ' +
   'Use the available tools to answer questions accurately and concisely.';
 
-// Confirm a 402 payment intent through the wallet (enforces limits).
-// Returns the confirmed payment_intent_id or throws with structured wallet error.
+// MCP-created PaymentIntents live in the MCP server's Stripe account.
+// This AI Agent cannot confirm them with its own Stripe secret key.
+// Return the MCP payment details so a compatible client/wallet/MPP layer can confirm using client_secret + publishable_key.
 async function payViaWallet(paymentData) {
-  const pi = paymentData.payment_methods?.stripe_per_call?.payment_intent;
+  const stripePerCall = paymentData.payment_methods?.stripe_per_call;
+  const pi = stripePerCall?.payment_intent;
+
   if (!pi?.id) {
     const err = new Error('402 response contained no Stripe payment_intent id');
     err.walletError = 'NO_PAYMENT_INTENT';
     throw err;
   }
 
-  const result = await confirmPayment({
-    paymentIntentId: pi.id,
-    metadata: { tool: paymentData.tool || 'unknown' },
-  });
-  return result.payment_intent_id;
+  const err = new Error(
+    'This PaymentIntent was created by the MCP server Stripe account. ' +
+    'The AI Agent cannot confirm it using its own Stripe secret key. ' +
+    'Confirm it through the returned client_secret/publishable_key flow, Stripe Connect, or a supported MPP wallet.'
+  );
+
+  err.walletError = 'CROSS_ACCOUNT_PAYMENT_INTENT';
+  err.payment_intent_id = pi.id;
+  err.client_secret = pi.client_secret;
+  err.publishable_key = stripePerCall?.publishable_key;
+  err.amount_cents = paymentData.amount_cents;
+  err.price = paymentData.price_usd;
+  err.currency = paymentData.currency || 'usd';
+  err.tool = paymentData.tool;
+  err.raw_payment_required = paymentData.raw || paymentData;
+
+  throw err;
 }
 
-// Invoke a tool, paying any 402 through the wallet.
+// Invoke a tool, surfacing any payment request without trying cross-account secret-key confirmation.
 // Returns { ok, content } or { ok: false, walletError } / { ok: false, paymentRequired }.
 async function callTool(mcpUrl, name, args, paymentToken) {
   try {
@@ -44,8 +58,13 @@ async function callTool(mcpUrl, name, args, paymentToken) {
         walletError: {
           code:    walletErr.code || walletErr.walletError || 'WALLET_ERROR',
           message: walletErr.message,
-          tool:    err.paymentRequired.tool,
-          price:   err.paymentRequired.price_usd,
+          tool:    walletErr.tool || err.paymentRequired.tool,
+          price:   walletErr.price || err.paymentRequired.price_usd,
+          currency: walletErr.currency || err.paymentRequired.currency,
+          payment_intent_id: walletErr.payment_intent_id,
+          client_secret: walletErr.client_secret,
+          publishable_key: walletErr.publishable_key,
+          raw_payment_required: walletErr.raw_payment_required,
           daily_spend_cents:    walletErr.daily_spend_cents,
           daily_limit_cents:    walletErr.daily_limit_cents,
           per_call_limit_cents: walletErr.per_call_limit_cents,
