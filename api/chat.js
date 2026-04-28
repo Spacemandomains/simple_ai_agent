@@ -13,12 +13,30 @@ const SYSTEM =
 // This AI Agent cannot confirm them with its own Stripe secret key.
 // Return the MCP payment details so a compatible client/wallet/MPP layer can confirm using client_secret + publishable_key.
 async function payViaWallet(paymentData) {
+  if (paymentData.status === 'setup_required' || paymentData.setup_intent_id) {
+    const err = new Error(
+      'Wallet setup is required. Confirm this SetupIntent once using the returned client_secret and publishable_key. ' +
+      'After setup, future add_funds calls can be confirmed off-session automatically by the MCP server.'
+    );
+
+    err.walletError = 'SETUP_INTENT_REQUIRED';
+    err.tool = paymentData.tool || 'create_wallet_setup';
+    err.setup_intent_id = paymentData.setup_intent_id;
+    err.client_secret = paymentData.client_secret;
+    err.publishable_key = paymentData.publishable_key;
+    err.stripe_customer_id = paymentData.stripe_customer_id;
+    err.raw_payment_required = paymentData.raw || paymentData;
+
+    throw err;
+  }
+
   const stripePerCall = paymentData.payment_methods?.stripe_per_call;
   const pi = stripePerCall?.payment_intent;
 
   if (!pi?.id) {
     const err = new Error('402 response contained no Stripe payment_intent id');
     err.walletError = 'NO_PAYMENT_INTENT';
+    err.raw_payment_required = paymentData.raw || paymentData;
     throw err;
   }
 
