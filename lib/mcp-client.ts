@@ -54,7 +54,13 @@ function getAgentPaymentIdentity() {
 
 function withAgentPaymentIdentity(name: string, args: Record<string, unknown> = {}): Record<string, unknown> {
   if (name !== 'register_agent') return args;
-  return { ...(args || {}), ...getAgentPaymentIdentity() };
+  const identity = getAgentPaymentIdentity();
+  // Only pass fields the MCP server needs — never pass stripe_payment_method_id
+  return {
+    ...(args || {}),
+    agent_id: identity.agent_id,
+    display_name: identity.display_name,
+  };
 }
 
 function normalizeBalanceCents(parsed: Record<string, unknown> | null): number | null {
@@ -117,10 +123,11 @@ async function saveAccount(url: string, parsed: Record<string, unknown>) {
   const balanceCents = normalizeBalanceCents(parsed);
   const stripeCustomerId = (parsed.stripe_customer_id as string) || identity.stripe_customer_id || null;
   const providerCustomerId = (parsed.provider_customer_id as string) || identity.provider_customer_id || stripeCustomerId;
+  const stripePaymentMethodId = (parsed.stripe_payment_method_id as string) || process.env.STRIPE_PAYMENT_METHOD_ID || null;
   const pool = getPool();
   await pool.query(
-    `INSERT INTO mcp_accounts (mcp_url, api_key, account_id, stripe_customer_id, display_name, agent_id, payment_provider, provider_customer_id, last_balance_cents, last_balance_usd, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+    `INSERT INTO mcp_accounts (mcp_url, api_key, account_id, stripe_customer_id, display_name, agent_id, payment_provider, provider_customer_id, stripe_payment_method_id, last_balance_cents, last_balance_usd, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
      ON CONFLICT (mcp_url) DO UPDATE SET
        api_key = EXCLUDED.api_key,
        account_id = COALESCE(EXCLUDED.account_id, mcp_accounts.account_id),
@@ -129,6 +136,7 @@ async function saveAccount(url: string, parsed: Record<string, unknown>) {
        agent_id = COALESCE(EXCLUDED.agent_id, mcp_accounts.agent_id),
        payment_provider = COALESCE(EXCLUDED.payment_provider, mcp_accounts.payment_provider),
        provider_customer_id = COALESCE(EXCLUDED.provider_customer_id, mcp_accounts.provider_customer_id),
+       stripe_payment_method_id = COALESCE(EXCLUDED.stripe_payment_method_id, mcp_accounts.stripe_payment_method_id),
        last_balance_cents = COALESCE(EXCLUDED.last_balance_cents, mcp_accounts.last_balance_cents),
        last_balance_usd = COALESCE(EXCLUDED.last_balance_usd, mcp_accounts.last_balance_usd),
        updated_at = NOW()`,
@@ -136,7 +144,7 @@ async function saveAccount(url: string, parsed: Record<string, unknown>) {
       url, parsed.api_key, (parsed.account_id as string) || null,
       stripeCustomerId, (parsed.display_name as string) || identity.display_name,
       identity.agent_id, identity.payment_provider, providerCustomerId,
-      balanceCents, (parsed.balance_usd as string) || null,
+      stripePaymentMethodId, balanceCents, (parsed.balance_usd as string) || null,
     ]
   );
 }
