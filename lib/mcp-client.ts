@@ -71,20 +71,16 @@ function withAgentPaymentIdentity(name: string, args: Record<string, unknown> = 
     throw new Error(`STRIPE_PAYMENT_METHOD_ID "${paymentMethodId}" is invalid — must start with "pm_"`);
   }
 
+  // Do NOT pass stripe_customer_id to register_agent — the MCP server creates
+  // its own internal Stripe customer. Passing an external cus_... causes the
+  // MCP server to look it up in its own Stripe account where it doesn't exist,
+  // breaking all subsequent save_payment_method / add_funds calls with
+  // "No such customer" errors.
   return {
     ...(args || {}),
     agent_id: identity.agent_id,
     display_name: identity.display_name,
     payment_provider: identity.payment_provider,
-    ...(customerId && {
-      stripe_customer_id: customerId,
-      provider_customer_id: identity.provider_customer_id ?? customerId,
-    }),
-    ...(paymentMethodId && {
-      stripe_payment_method_id: paymentMethodId,
-      provider_payment_method_id: paymentMethodId,
-      payment_method_id: paymentMethodId,
-    }),
   };
 }
 
