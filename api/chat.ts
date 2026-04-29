@@ -6,49 +6,30 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
   
   function buildSystemPrompt(): string {
-      const lines: string[] = [
-        'You are a helpful assistant with access to tools provided by an MCP server.',
-        'Use the available tools to answer questions accurately and concisely.',
-        '',
-        'AGENT ENVIRONMENT — use these values automatically when the MCP server asks for registration or payment:',
-      ];
+    const agentId = process.env.AGENT_ID || 'hawaii-agent-001';
+    const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
 
-      const agentId = process.env.AGENT_ID || 'simple-ai-agent';
-      const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
-
-      lines.push(`- agent_id: ${agentId}`);
-      lines.push(`- display_name: ${displayName}`);
-
-      if (process.env.STRIPE_PAYMENT_METHOD_ID) {
-        lines.push(`- stripe_payment_method_id: ${process.env.STRIPE_PAYMENT_METHOD_ID} (use this for save_payment_method)`);
-      }
-
-      lines.push('');
-      lines.push('MCP PAYMENT WORKFLOW — follow this exact order, skipping any step already done:');
-      lines.push(
-        '1. REGISTER: Call register_agent passing ONLY agent_id and display_name. ' +
-        'CRITICAL: Do NOT pass stripe_customer_id, provider_customer_id, or any payment_method_id. ' +
-        'Passing a stripe_customer_id causes the MCP server to try to find that customer in its own ' +
-        'Stripe account — where it does not exist — and breaks all payment calls with ' +
-        '"No such customer" errors. Note the api_key from the response and check payment_method_saved.'
-      );
-      lines.push(
-        '2. SAVE PAYMENT METHOD (only if payment_method_saved is false): ' +
-        'Call save_payment_method with a Stripe payment method ID (pm_...): ' +
-        '  • TEST MODE: use the literal string "pm_card_visa" — Stripe built-in, always valid. ' +
-        '  • If stripe_payment_method_id is listed above, use it instead of pm_card_visa. ' +
-        '  • LIVE MODE: create a real pm_... by POSTing card details to https://api.stripe.com/v1/payment_methods ' +
-        '    using the publishable_key from the register_agent response.'
-      );
-      lines.push(
-        '3. ADD FUNDS: After save_payment_method succeeds, call add_funds_5, add_funds_10, or add_funds_20.'
-      );
-      lines.push(
-        '4. PAID TOOLS: Send the api_key from step 1 in the X-MCP-Account header on every paid tool call.'
-      );
-
-      return lines.join('\n');
-    }
+    return [
+      'You are a helpful assistant with access to tools provided by an MCP server.',
+      'Use the available tools to answer questions accurately and concisely.',
+      '',
+      'AGENT IDENTITY — always use these exact values for registration:',
+      `- agent_id: ${agentId}`,
+      `- display_name: ${displayName}`,
+      '',
+      'MCP PAYMENT WORKFLOW — the MCP server owns all Stripe billing. Follow its instructions exactly:',
+      '1. REGISTER: Call register_agent({ agent_id, display_name }) — nothing else. Do NOT add stripe_customer_id,',
+      '   stripe_payment_method_id, payment_provider, or any other fields. The MCP server creates its own',
+      '   Stripe customer and returns an api_key.',
+      '2. FOLLOW SERVER INSTRUCTIONS: Read the next_steps array from the register_agent response and do',
+      '   exactly what it says. If it says call save_payment_method, call it using the payment method or',
+      '   checkout URL the MCP server provides. Do NOT invent payment method IDs.',
+      '3. ADD FUNDS: Call add_funds_5, add_funds_10, or add_funds_20 as instructed.',
+      '   If the server returns a setup_required or payment_required response with a client_secret,',
+      '   surface that to the user — it means a card confirmation is needed in the browser.',
+      '4. PAID TOOLS: Include the api_key from step 1 in the X-MCP-Account header on every paid call.',
+    ].join('\n');
+  }
   
 
   async function payViaWallet(paymentData: Record<string, unknown>) {
