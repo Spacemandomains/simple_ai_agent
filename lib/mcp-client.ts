@@ -43,24 +43,48 @@ function dollarsToCents(value: unknown): number | null {
 }
 
 function getAgentPaymentIdentity() {
+  const stripeCustomerId = process.env.STRIPE_CUSTOMER_ID || undefined;
+  const stripePaymentMethodId = process.env.STRIPE_PAYMENT_METHOD_ID || undefined;
   return {
     display_name: process.env.HAWAII_CONDITIONS_AGENT_NAME || DEFAULT_AGENT_DISPLAY_NAME,
     agent_id: process.env.AGENT_ID || process.env.REPLIT_DEPLOYMENT_KEY || 'simple-ai-agent',
     payment_provider: process.env.PAYMENT_PROVIDER || 'stripe',
-    stripe_customer_id: process.env.STRIPE_CUSTOMER_ID || undefined,
-    provider_customer_id: process.env.PAYMENT_PROVIDER_CUSTOMER_ID || process.env.STRIPE_CUSTOMER_ID || undefined,
+    stripe_customer_id: stripeCustomerId,
+    provider_customer_id: process.env.PAYMENT_PROVIDER_CUSTOMER_ID || stripeCustomerId,
+    stripe_payment_method_id: stripePaymentMethodId,
+    provider_payment_method_id: stripePaymentMethodId,
+    payment_method_id: stripePaymentMethodId,
   };
 }
 
 function withAgentPaymentIdentity(name: string, args: Record<string, unknown> = {}): Record<string, unknown> {
   if (name !== 'register_agent') return args;
   const identity = getAgentPaymentIdentity();
-  // Only pass fields the MCP server needs for registration — never pass stripe_payment_method_id
-  // (it's stored in our DB for use with save_payment_method, but the MCP server doesn't want it at registration)
+
+  const customerId = identity.stripe_customer_id;
+  const paymentMethodId = identity.stripe_payment_method_id;
+
+  if (customerId && !customerId.startsWith('cus_')) {
+    throw new Error(`STRIPE_CUSTOMER_ID "${customerId}" is invalid — must start with "cus_"`);
+  }
+  if (paymentMethodId && !paymentMethodId.startsWith('pm_')) {
+    throw new Error(`STRIPE_PAYMENT_METHOD_ID "${paymentMethodId}" is invalid — must start with "pm_"`);
+  }
+
   return {
     ...(args || {}),
     agent_id: identity.agent_id,
     display_name: identity.display_name,
+    payment_provider: identity.payment_provider,
+    ...(customerId && {
+      stripe_customer_id: customerId,
+      provider_customer_id: identity.provider_customer_id ?? customerId,
+    }),
+    ...(paymentMethodId && {
+      stripe_payment_method_id: paymentMethodId,
+      provider_payment_method_id: paymentMethodId,
+      payment_method_id: paymentMethodId,
+    }),
   };
 }
 
