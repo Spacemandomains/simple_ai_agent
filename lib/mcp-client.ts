@@ -8,16 +8,16 @@ const DEFAULT_AGENT_DISPLAY_NAME = 'Hawaii Conditions User';
 let _pool: pg.Pool | null = null;
 
 function getPool() {
-    if (!_pool) {
-      const connStr = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
-      if (!connStr) throw new Error('No database connection string set (NEON_DATABASE_URL or DATABASE_URL)');
-      _pool = new Pool({
-        connectionString: connStr,
-        ssl: process.env.NEON_DATABASE_URL ? { rejectUnauthorized: false } : undefined,
-      });
-    }
-    return _pool;
+  if (!_pool) {
+    const connStr = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+    if (!connStr) throw new Error('No database connection string set (NEON_DATABASE_URL or DATABASE_URL)');
+    _pool = new Pool({
+      connectionString: connStr,
+      ssl: process.env.NEON_DATABASE_URL ? { rejectUnauthorized: false } : undefined,
+    });
   }
+  return _pool;
+}
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const client = getPool();
@@ -45,7 +45,7 @@ function dollarsToCents(value: unknown): number | null {
 function getAgentPaymentIdentity() {
   return {
     display_name: process.env.HAWAII_CONDITIONS_AGENT_NAME || DEFAULT_AGENT_DISPLAY_NAME,
-    agent_id: process.env.AGENT_ID || 'simple-ai-agent',
+    agent_id: process.env.AGENT_ID || process.env.REPLIT_DEPLOYMENT_KEY || 'simple-ai-agent',
     payment_provider: process.env.PAYMENT_PROVIDER || 'stripe',
     stripe_customer_id: process.env.STRIPE_CUSTOMER_ID || undefined,
     provider_customer_id: process.env.PAYMENT_PROVIDER_CUSTOMER_ID || process.env.STRIPE_CUSTOMER_ID || undefined,
@@ -55,7 +55,8 @@ function getAgentPaymentIdentity() {
 function withAgentPaymentIdentity(name: string, args: Record<string, unknown> = {}): Record<string, unknown> {
   if (name !== 'register_agent') return args;
   const identity = getAgentPaymentIdentity();
-  // Only pass fields the MCP server needs — never pass stripe_payment_method_id
+  // Only pass fields the MCP server needs for registration — never pass stripe_payment_method_id
+  // (it's stored in our DB for use with save_payment_method, but the MCP server doesn't want it at registration)
   return {
     ...(args || {}),
     agent_id: identity.agent_id,
@@ -90,7 +91,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS agent_id TEXT`);
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS payment_provider TEXT`);
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS provider_customer_id TEXT`);
-    await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS stripe_payment_method_id TEXT`);
+  await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS stripe_payment_method_id TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mcp_balance_history (
       id SERIAL PRIMARY KEY,
@@ -107,6 +108,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS agent_id TEXT`);
   await pool.query(`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS payment_provider TEXT`);
   await pool.query(`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS provider_customer_id TEXT`);
+  await pool.query(`ALTER TABLE mcp_balance_history ADD COLUMN IF NOT EXISTS stripe_payment_method_id TEXT`);
 }
 
 async function getAccountFromDB(url: string) {
@@ -123,6 +125,7 @@ async function saveAccount(url: string, parsed: Record<string, unknown>) {
   const balanceCents = normalizeBalanceCents(parsed);
   const stripeCustomerId = (parsed.stripe_customer_id as string) || identity.stripe_customer_id || null;
   const providerCustomerId = (parsed.provider_customer_id as string) || identity.provider_customer_id || stripeCustomerId;
+  // Persist the agent's payment method ID from the environment so it's available for save_payment_method calls
   const stripePaymentMethodId = (parsed.stripe_payment_method_id as string) || process.env.STRIPE_PAYMENT_METHOD_ID || null;
   const pool = getPool();
   await pool.query(
