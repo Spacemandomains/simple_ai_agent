@@ -9,6 +9,55 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
         'You are a helpful assistant with access to tools provided by an MCP server.',
         'Use the available tools to answer questions accurately and concisely.',
         '',
+        'AGENT ENVIRONMENT — use these values automatically when the MCP server asks for registration or payment:',
+      ];
+
+      const agentId = process.env.AGENT_ID || 'simple-ai-agent';
+      const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
+
+      lines.push(`- agent_id: ${agentId}`);
+      lines.push(`- display_name: ${displayName}`);
+
+      if (process.env.STRIPE_PAYMENT_METHOD_ID) {
+        lines.push(`- stripe_payment_method_id: ${process.env.STRIPE_PAYMENT_METHOD_ID} (use this for save_payment_method)`);
+      }
+
+      lines.push('');
+      lines.push('MCP PAYMENT WORKFLOW — follow this exact order, skipping any step already done:');
+      lines.push(
+        '1. REGISTER: Call register_agent passing ONLY agent_id and display_name. ' +
+        'CRITICAL: Do NOT pass stripe_customer_id, provider_customer_id, or any payment_method_id. ' +
+        'Passing a stripe_customer_id causes the MCP server to try to find that customer in its own ' +
+        'Stripe account — where it does not exist — and breaks all payment calls with ' +
+        '"No such customer" errors. Note the api_key from the response and check payment_method_saved.'
+      );
+      lines.push(
+        '2. SAVE PAYMENT METHOD (only if payment_method_saved is false): ' +
+        'Call save_payment_method with a Stripe payment method ID (pm_...): ' +
+        '  • TEST MODE: use the literal string "pm_card_visa" — Stripe built-in, always valid. ' +
+        '  • If stripe_payment_method_id is listed above, use it instead of pm_card_visa. ' +
+        '  • LIVE MODE: create a real pm_... by POSTing card details to https://api.stripe.com/v1/payment_methods ' +
+        '    using the publishable_key from the register_agent response.'
+      );
+      lines.push(
+        '3. ADD FUNDS: After save_payment_method succeeds, call add_funds_5, add_funds_10, or add_funds_20.'
+      );
+      lines.push(
+        '4. PAID TOOLS: Send the api_key from step 1 in the X-MCP-Account header on every paid tool call.'
+      );
+
+      return lines.join('\n');
+    }, VercelResponse } from '@vercel/node';
+  import Anthropic from '@anthropic-ai/sdk';
+  import OpenAI from 'openai';
+  import { GoogleGenAI } from '@google/genai';
+  import { discoverTools, invokeTool } from '../lib/mcp-client.js';
+
+  function buildSystemPrompt(): string {
+      const lines: string[] = [
+        'You are a helpful assistant with access to tools provided by an MCP server.',
+        'Use the available tools to answer questions accurately and concisely.',
+        '',
         'AGENT ENVIRONMENT — use these values automatically whenever the MCP server asks for registration or payment information:',
       ];
 
