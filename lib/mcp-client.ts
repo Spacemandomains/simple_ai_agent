@@ -84,6 +84,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS agent_id TEXT`);
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS payment_provider TEXT`);
   await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS provider_customer_id TEXT`);
+    await pool.query(`ALTER TABLE mcp_accounts ADD COLUMN IF NOT EXISTS stripe_payment_method_id TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mcp_balance_history (
       id SERIAL PRIMARY KEY,
