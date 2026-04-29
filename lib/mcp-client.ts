@@ -8,12 +8,16 @@ const DEFAULT_AGENT_DISPLAY_NAME = 'Hawaii Conditions User';
 let _pool: pg.Pool | null = null;
 
 function getPool() {
-  if (!_pool) {
-    if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL not set');
-    _pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    if (!_pool) {
+      const connStr = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+      if (!connStr) throw new Error('No database connection string set (NEON_DATABASE_URL or DATABASE_URL)');
+      _pool = new Pool({
+        connectionString: connStr,
+        ssl: process.env.NEON_DATABASE_URL ? { rejectUnauthorized: false } : undefined,
+      });
+    }
+    return _pool;
   }
-  return _pool;
-}
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const client = getPool();
