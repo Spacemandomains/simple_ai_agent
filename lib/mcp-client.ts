@@ -323,6 +323,15 @@ async function processToolResponse(url: string, toolName: string, resp: Record<s
   return parsed;
 }
 
+export async function persistPaymentMethodId(url: string, pmId: string): Promise<void> {
+  await ensureSchema();
+  const pool = getPool();
+  await pool.query(
+    `UPDATE mcp_accounts SET stripe_payment_method_id = $1, updated_at = NOW() WHERE mcp_url = $2`,
+    [pmId, url]
+  );
+}
+
 export async function discoverTools(url: string, paymentToken: string | undefined) {
   const account = await getAccountFromDB(url);
   await post(url, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agent', version: '1.0' } }, 1, paymentToken, account?.api_key);
