@@ -5,37 +5,55 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
   import { discoverTools, invokeTool } from '../lib/mcp-client.js';
 
   function buildSystemPrompt(): string {
-    const lines: string[] = [
-      'You are a helpful assistant with access to tools provided by an MCP server.',
-      'Use the available tools to answer questions accurately and concisely.',
-      '',
-      'AGENT ENVIRONMENT — use these values automatically whenever the MCP server asks for registration or payment information:',
-    ];
+      const lines: string[] = [
+        'You are a helpful assistant with access to tools provided by an MCP server.',
+        'Use the available tools to answer questions accurately and concisely.',
+        '',
+        'AGENT ENVIRONMENT — use these values automatically whenever the MCP server asks for registration or payment information:',
+      ];
 
-    const agentId = process.env.AGENT_ID || 'simple-ai-agent';
-    const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
-    const paymentProvider = process.env.PAYMENT_PROVIDER || 'stripe';
+      const agentId = process.env.AGENT_ID || 'simple-ai-agent';
+      const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
+      const paymentProvider = process.env.PAYMENT_PROVIDER || 'stripe';
 
-    lines.push(`- agent_id: ${agentId}`);
-    lines.push(`- display_name: ${displayName}`);
-    lines.push(`- payment_provider: ${paymentProvider}`);
+      lines.push(`- agent_id: ${agentId}`);
+      lines.push(`- display_name: ${displayName}`);
+      lines.push(`- payment_provider: ${paymentProvider}`);
 
-    if (process.env.STRIPE_CUSTOMER_ID) {
-      lines.push(`- stripe_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
-      lines.push(`- provider_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
+      if (process.env.STRIPE_CUSTOMER_ID) {
+        lines.push(`- stripe_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
+        lines.push(`- provider_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
+      }
+
+      lines.push('');
+      lines.push(
+        'When registering with an MCP server (e.g. via a register_agent tool), ' +
+        'always pass the values above — do not ask the user for them.'
+      );
+      lines.push('');
+      lines.push('MCP PAYMENT WORKFLOW — follow this order strictly:');
+      lines.push(
+        '1. REGISTER: Call register_agent with the agent credentials above. ' +
+        'Check the response for payment_method_saved.'
+      );
+      lines.push(
+        '2. SAVE PAYMENT METHOD: If payment_method_saved is false (or missing) in the registration response, ' +
+        'you MUST call save_payment_method before attempting any add_funds call. ' +
+        "IMPORTANT: The MCP server runs on its own Stripe account — the stripe_customer_id above is from the " +
+        "agent's Stripe account and cannot be charged directly by the MCP server. " +
+        'Use a Stripe payment method ID (pm_...) from the environment or ask the user to provide one. ' +
+        'Never skip this step or attempt add_funds first.'
+      );
+      lines.push(
+        '3. ADD FUNDS: Only after save_payment_method succeeds, call add_funds_5, add_funds_10, or add_funds_20.'
+      );
+      lines.push(
+        '4. PAID TOOLS: Always send the api_key from registration in the X-MCP-Account header for paid tool calls. ' +
+        'The server-side wallet handles payment confirmation automatically.'
+      );
+
+      return lines.join('\n');
     }
-
-    lines.push('');
-    lines.push(
-      'When registering with an MCP server (e.g. via a register_agent tool), ' +
-      'always pass the values above — do not ask the user for them. ' +
-      'When a tool returns a payment_required or setup_required response, ' +
-      'use the stripe_customer_id above for the payment identity. ' +
-      'The server-side wallet will handle the actual payment confirmation automatically.'
-    );
-
-    return lines.join('\n');
-  }
 
   async function payViaWallet(paymentData: Record<string, unknown>) {
     if ((paymentData as any).status === 'setup_required' || (paymentData as any).setup_intent_id) {
