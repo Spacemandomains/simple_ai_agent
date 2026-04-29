@@ -326,10 +326,13 @@ async function processToolResponse(url: string, toolName: string, resp: Record<s
 export async function persistPaymentMethodId(url: string, pmId: string): Promise<void> {
   await ensureSchema();
   const pool = getPool();
-  await pool.query(
+  const result = await pool.query(
     `UPDATE mcp_accounts SET stripe_payment_method_id = $1, updated_at = NOW() WHERE mcp_url = $2`,
     [pmId, url]
   );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new Error(`No account found for MCP URL: ${url}. Complete agent registration before saving a payment method.`);
+  }
 }
 
 export async function discoverTools(url: string, paymentToken: string | undefined) {
