@@ -264,7 +264,7 @@ function AgentApp() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+      <WouterRouter base={""}>
         <Switch>
           <Route path="/" component={AgentApp} />
           <Route>
