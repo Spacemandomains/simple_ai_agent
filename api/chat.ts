@@ -4,6 +4,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
   import { GoogleGenAI } from '@google/genai';
   import { discoverTools, invokeTool } from '../lib/mcp-client.js';
 
+  
   function buildSystemPrompt(): string {
       const lines: string[] = [
         'You are a helpful assistant with access to tools provided by an MCP server.',
@@ -47,68 +48,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
       );
 
       return lines.join('\n');
-    }, VercelResponse } from '@vercel/node';
-  import Anthropic from '@anthropic-ai/sdk';
-  import OpenAI from 'openai';
-  import { GoogleGenAI } from '@google/genai';
-  import { discoverTools, invokeTool } from '../lib/mcp-client.js';
-
-  function buildSystemPrompt(): string {
-      const lines: string[] = [
-        'You are a helpful assistant with access to tools provided by an MCP server.',
-        'Use the available tools to answer questions accurately and concisely.',
-        '',
-        'AGENT ENVIRONMENT — use these values automatically whenever the MCP server asks for registration or payment information:',
-      ];
-
-      const agentId = process.env.AGENT_ID || 'simple-ai-agent';
-      const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
-      const paymentProvider = process.env.PAYMENT_PROVIDER || 'stripe';
-
-      lines.push(`- agent_id: ${agentId}`);
-      lines.push(`- display_name: ${displayName}`);
-      lines.push(`- payment_provider: ${paymentProvider}`);
-
-      if (process.env.STRIPE_CUSTOMER_ID) {
-        lines.push(`- stripe_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
-        lines.push(`- provider_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
-      }
-
-      if (process.env.STRIPE_PAYMENT_METHOD_ID) {
-        lines.push(`- stripe_payment_method_id: ${process.env.STRIPE_PAYMENT_METHOD_ID} (use this for save_payment_method)`);
-      }
-
-      lines.push('');
-      lines.push(
-        'When registering with an MCP server (e.g. via a register_agent tool), ' +
-        'always pass the agent credentials above — do not ask the user for them.'
-      );
-      lines.push('');
-      lines.push('MCP PAYMENT WORKFLOW — follow this exact order, skipping any step that is already complete:');
-      lines.push(
-        '1. REGISTER: Call register_agent with the agent credentials above. ' +
-        'Inspect the response: note the api_key and check payment_method_saved.'
-      );
-      lines.push(
-        '2. SAVE PAYMENT METHOD (only if payment_method_saved is false): ' +
-        'Call save_payment_method with a Stripe payment method ID (pm_...). ' +
-        'HOW TO GET A PM ID: ' +
-        '  • If stripe_payment_method_id is listed above, use it automatically — no need to ask. ' +
-        '  • In Stripe TEST MODE, "pm_card_visa" is a built-in test ID that always works. ' +
-        '  • In LIVE MODE, the user must provide a real pm_... from their Stripe dashboard (Payment Methods section). ' +
-        'WHY: The MCP server has its own Stripe account. Your stripe_customer_id exists in YOUR Stripe account ' +
-        'and is unknown to the MCP server — passing it as a payment method will fail. ' +
-        'You must save a pm_... so the MCP server can bill you through its own Stripe.'
-      );
-      lines.push(
-        '3. ADD FUNDS: Call add_funds_5, add_funds_10, or add_funds_20 after save_payment_method succeeds.'
-      );
-      lines.push(
-        '4. PAID TOOLS: Always include the api_key (from step 1) in the X-MCP-Account header on every paid tool call.'
-      );
-
-      return lines.join('\n');
     }
+  
 
   async function payViaWallet(paymentData: Record<string, unknown>) {
     if ((paymentData as any).status === 'setup_required' || (paymentData as any).setup_intent_id) {
