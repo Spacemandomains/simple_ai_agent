@@ -25,31 +25,37 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
         lines.push(`- provider_customer_id: ${process.env.STRIPE_CUSTOMER_ID}`);
       }
 
+      if (process.env.STRIPE_PAYMENT_METHOD_ID) {
+        lines.push(`- stripe_payment_method_id: ${process.env.STRIPE_PAYMENT_METHOD_ID} (use this for save_payment_method)`);
+      }
+
       lines.push('');
       lines.push(
         'When registering with an MCP server (e.g. via a register_agent tool), ' +
-        'always pass the values above — do not ask the user for them.'
+        'always pass the agent credentials above — do not ask the user for them.'
       );
       lines.push('');
-      lines.push('MCP PAYMENT WORKFLOW — follow this order strictly:');
+      lines.push('MCP PAYMENT WORKFLOW — follow this exact order, skipping any step that is already complete:');
       lines.push(
         '1. REGISTER: Call register_agent with the agent credentials above. ' +
-        'Check the response for payment_method_saved.'
+        'Inspect the response: note the api_key and check payment_method_saved.'
       );
       lines.push(
-        '2. SAVE PAYMENT METHOD: If payment_method_saved is false (or missing) in the registration response, ' +
-        'you MUST call save_payment_method before attempting any add_funds call. ' +
-        "IMPORTANT: The MCP server runs on its own Stripe account — the stripe_customer_id above is from the " +
-        "agent's Stripe account and cannot be charged directly by the MCP server. " +
-        'Use a Stripe payment method ID (pm_...) from the environment or ask the user to provide one. ' +
-        'Never skip this step or attempt add_funds first.'
+        '2. SAVE PAYMENT METHOD (only if payment_method_saved is false): ' +
+        'Call save_payment_method with a Stripe payment method ID (pm_...). ' +
+        'HOW TO GET A PM ID: ' +
+        '  • If stripe_payment_method_id is listed above, use it automatically — no need to ask. ' +
+        '  • In Stripe TEST MODE, "pm_card_visa" is a built-in test ID that always works. ' +
+        '  • In LIVE MODE, the user must provide a real pm_... from their Stripe dashboard (Payment Methods section). ' +
+        'WHY: The MCP server has its own Stripe account. Your stripe_customer_id exists in YOUR Stripe account ' +
+        'and is unknown to the MCP server — passing it as a payment method will fail. ' +
+        'You must save a pm_... so the MCP server can bill you through its own Stripe.'
       );
       lines.push(
-        '3. ADD FUNDS: Only after save_payment_method succeeds, call add_funds_5, add_funds_10, or add_funds_20.'
+        '3. ADD FUNDS: Call add_funds_5, add_funds_10, or add_funds_20 after save_payment_method succeeds.'
       );
       lines.push(
-        '4. PAID TOOLS: Always send the api_key from registration in the X-MCP-Account header for paid tool calls. ' +
-        'The server-side wallet handles payment confirmation automatically.'
+        '4. PAID TOOLS: Always include the api_key (from step 1) in the X-MCP-Account header on every paid tool call.'
       );
 
       return lines.join('\n');
