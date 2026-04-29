@@ -42,49 +42,20 @@ function dollarsToCents(value: unknown): number | null {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
 }
 
-function getAgentPaymentIdentity() {
-  const stripeCustomerId = process.env.STRIPE_CUSTOMER_ID || undefined;
-  const stripePaymentMethodId = process.env.STRIPE_PAYMENT_METHOD_ID || undefined;
+function getAgentIdentity() {
   return {
+    agent_id: process.env.AGENT_ID || 'hawaii-agent-001',
     display_name: process.env.HAWAII_CONDITIONS_AGENT_NAME || DEFAULT_AGENT_DISPLAY_NAME,
-    agent_id: process.env.AGENT_ID || process.env.REPLIT_DEPLOYMENT_KEY || 'simple-ai-agent',
-    payment_provider: process.env.PAYMENT_PROVIDER || 'stripe',
-    stripe_customer_id: stripeCustomerId,
-    provider_customer_id: process.env.PAYMENT_PROVIDER_CUSTOMER_ID || stripeCustomerId,
-    stripe_payment_method_id: stripePaymentMethodId,
-    provider_payment_method_id: stripePaymentMethodId,
-    payment_method_id: stripePaymentMethodId,
   };
 }
 
-function withAgentPaymentIdentity(name: string, args: Record<string, unknown> = {}): Record<string, unknown> {
+function withAgentIdentity(name: string, args: Record<string, unknown> = {}): Record<string, unknown> {
   if (name !== 'register_agent') return args;
-  const identity = getAgentPaymentIdentity();
-
-  const customerId = identity.stripe_customer_id;
-  const paymentMethodId = identity.stripe_payment_method_id;
-
-  if (customerId && !customerId.startsWith('cus_')) {
-    throw new Error(`STRIPE_CUSTOMER_ID "${customerId}" is invalid — must start with "cus_"`);
-  }
-  if (paymentMethodId && !paymentMethodId.startsWith('pm_')) {
-    throw new Error(`STRIPE_PAYMENT_METHOD_ID "${paymentMethodId}" is invalid — must start with "pm_"`);
-  }
-
+  const identity = getAgentIdentity();
   return {
     ...(args || {}),
     agent_id: identity.agent_id,
     display_name: identity.display_name,
-    payment_provider: identity.payment_provider,
-    ...(customerId && {
-      stripe_customer_id: customerId,
-      provider_customer_id: identity.provider_customer_id ?? customerId,
-    }),
-    ...(paymentMethodId && {
-      stripe_payment_method_id: paymentMethodId,
-      provider_payment_method_id: paymentMethodId,
-      payment_method_id: paymentMethodId,
-    }),
   };
 }
 
@@ -145,12 +116,10 @@ async function getAccountFromDB(url: string) {
 async function saveAccount(url: string, parsed: Record<string, unknown>) {
   await ensureSchema();
   if (!parsed?.api_key) return;
-  const identity = getAgentPaymentIdentity();
+  const identity = getAgentIdentity();
   const balanceCents = normalizeBalanceCents(parsed);
-  const stripeCustomerId = (parsed.stripe_customer_id as string) || identity.stripe_customer_id || null;
-  const providerCustomerId = (parsed.provider_customer_id as string) || identity.provider_customer_id || stripeCustomerId;
-  // Persist the agent's payment method ID from the environment so it's available for save_payment_method calls
-  const stripePaymentMethodId = (parsed.stripe_payment_method_id as string) || process.env.STRIPE_PAYMENT_METHOD_ID || null;
+  const stripeCustomerId = (parsed.stripe_customer_id as string) || null;
+  const stripePaymentMethodId = (parsed.stripe_payment_method_id as string) || null;
   const pool = getPool();
   await pool.query(
     `INSERT INTO mcp_accounts (mcp_url, api_key, account_id, stripe_customer_id, display_name, agent_id, payment_provider, provider_customer_id, stripe_payment_method_id, last_balance_cents, last_balance_usd, updated_at)
@@ -170,7 +139,7 @@ async function saveAccount(url: string, parsed: Record<string, unknown>) {
     [
       url, parsed.api_key, (parsed.account_id as string) || null,
       stripeCustomerId, (parsed.display_name as string) || identity.display_name,
-      identity.agent_id, identity.payment_provider, providerCustomerId,
+      identity.agent_id, (parsed.payment_provider as string) || null, (parsed.provider_customer_id as string) || stripeCustomerId,
       stripePaymentMethodId, balanceCents, (parsed.balance_usd as string) || null,
     ]
   );
@@ -183,16 +152,16 @@ async function recordBalanceSnapshot(url: string, toolName: string, parsed: Reco
   if (!hasBalance) return;
   await ensureSchema();
   const existing = await getAccountFromDB(url);
-  const identity = getAgentPaymentIdentity();
-  const stripeCustomerId = (parsed.stripe_customer_id as string) || existing?.stripe_customer_id || identity.stripe_customer_id || null;
-  const providerCustomerId = (parsed.provider_customer_id as string) || existing?.provider_customer_id || identity.provider_customer_id || stripeCustomerId;
+  const identity = getAgentIdentity();
+  const stripeCustomerId = (parsed.stripe_customer_id as string) || existing?.stripe_customer_id || null;
+  const providerCustomerId = (parsed.provider_customer_id as string) || existing?.provider_customer_id || stripeCustomerId;
   const pool = getPool();
   await pool.query(
     `INSERT INTO mcp_balance_history (mcp_url, account_id, stripe_customer_id, agent_id, payment_provider, provider_customer_id, tool_name, balance_cents, balance_usd, raw_response)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       url, (parsed.account_id as string) || existing?.account_id || null,
-      stripeCustomerId, identity.agent_id, identity.payment_provider, providerCustomerId,
+      stripeCustomerId, identity.agent_id, (parsed.payment_provider as string) || existing?.payment_provider || null, providerCustomerId,
       toolName, balanceCents, (parsed.balance_usd as string) || null, JSON.stringify(parsed),
     ]
   );
@@ -209,7 +178,7 @@ async function recordBalanceSnapshot(url: string, toolName: string, parsed: Reco
      WHERE mcp_url = $8`,
     [
       (parsed.account_id as string) || null, stripeCustomerId,
-      identity.agent_id, identity.payment_provider, providerCustomerId,
+      identity.agent_id, (parsed.payment_provider as string) || null, providerCustomerId,
       balanceCents, (parsed.balance_usd as string) || null, url,
     ]
   );
@@ -324,11 +293,11 @@ async function post(
 }
 
 async function callRawTool(url: string, name: string, args: Record<string, unknown>, paymentToken: string | undefined, accountKey: string | undefined) {
-  return post(url, 'tools/call', { name, arguments: withAgentPaymentIdentity(name, args) ?? {} }, Date.now(), paymentToken, accountKey);
+  return post(url, 'tools/call', { name, arguments: withAgentIdentity(name, args) ?? {} }, Date.now(), paymentToken, accountKey);
 }
 
 async function registerAgent(url: string, paymentToken: string | undefined): Promise<Record<string, unknown> | null> {
-  const resp = await callRawTool(url, 'register_agent', getAgentPaymentIdentity() as Record<string, unknown>, paymentToken, undefined);
+  const resp = await callRawTool(url, 'register_agent', getAgentIdentity() as Record<string, unknown>, paymentToken, undefined);
   const parsed = parseToolJson(resp);
   if (parsed?.api_key) {
     await saveAccount(url, parsed);
