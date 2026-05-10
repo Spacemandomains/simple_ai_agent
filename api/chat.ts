@@ -1,10 +1,132 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-  import Anthropic from '@anthropic-ai/sdk';
-  import OpenAI from 'openai';
-  import { GoogleGenAI } from '@google/genai';
-  import { discoverTools, invokeTool } from '../lib/mcp-client.js';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import { GoogleGenAI } from '@google/genai';
+import { discoverTools, invokeTool } from '../lib/mcp-client.js';
 
-  
+const HTTP_TOOL_NAMES = new Set(['http_get', 'http_post']);
+
+const HTTP_TOOLS_ANTHROPIC = [
+  {
+    name: 'http_get',
+    description: 'Send an HTTP GET request to a URL and return the status code and response body.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'The URL to request' },
+        headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'http_post',
+    description: 'Send an HTTP POST request to a URL with an optional JSON body and return the status code and response body.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'The URL to request' },
+        body: { description: 'The request body (object will be JSON-serialized)' },
+        headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+      },
+      required: ['url'],
+    },
+  },
+];
+
+const HTTP_TOOLS_OPENAI = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'http_get',
+      description: 'Send an HTTP GET request to a URL and return the status code and response body.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to request' },
+          headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'http_post',
+      description: 'Send an HTTP POST request to a URL with an optional JSON body and return the status code and response body.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to request' },
+          body: { description: 'The request body (object will be JSON-serialized)' },
+          headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+        },
+        required: ['url'],
+      },
+    },
+  },
+];
+
+const HTTP_TOOLS_GEMINI = [
+  {
+    name: 'http_get',
+    description: 'Send an HTTP GET request to a URL and return the status code and response body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The URL to request' },
+        headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'http_post',
+    description: 'Send an HTTP POST request to a URL with an optional JSON body and return the status code and response body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The URL to request' },
+        body: { description: 'The request body (object will be JSON-serialized)' },
+        headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+      },
+      required: ['url'],
+    },
+  },
+];
+
+async function executeHttpTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const url = args.url as string;
+  if (!url) return JSON.stringify({ error: 'url is required' });
+
+  const extraHeaders = (args.headers as Record<string, string>) || {};
+  const headers: Record<string, string> = { 'User-Agent': 'SimpleAIAgent/1.0', ...extraHeaders };
+
+  try {
+    let response: Response;
+    if (name === 'http_get') {
+      response = await fetch(url, { method: 'GET', headers });
+    } else {
+      if (!headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = 'application/json';
+      }
+      const rawBody = args.body;
+      const body = typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody ?? {});
+      response = await fetch(url, { method: 'POST', headers, body });
+    }
+
+    const responseText = await response.text();
+    let responseBody: unknown;
+    try { responseBody = JSON.parse(responseText); } catch { responseBody = responseText; }
+
+    return JSON.stringify({ status: response.status, statusText: response.statusText, body: responseBody });
+  } catch (err: any) {
+    return JSON.stringify({ error: err.message });
+  }
+}
+
+
   function buildSystemPrompt(): string {
     const agentId = process.env.AGENT_ID || 'hawaii-agent-001';
     const displayName = process.env.HAWAII_CONDITIONS_AGENT_NAME || 'Hawaii Conditions User';
@@ -123,11 +245,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
-    const tools = mcpTools.map((t: any) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.inputSchema || { type: 'object', properties: {} },
-    }));
+    const tools = [
+      ...HTTP_TOOLS_ANTHROPIC,
+      ...mcpTools.map((t: any) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema || { type: 'object', properties: {} },
+      })),
+    ];
 
     const msgs = (messages as any[]).map((m) => ({ role: m.role, content: m.content }));
     const blocks: unknown[] = [];
@@ -153,9 +278,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
       const toolResults: unknown[] = [];
       for (const tu of toolUses as any[]) {
         blocks.push({ type: 'tool_use', name: tu.name, input: tu.input });
-        const result = await callToolSafe(mcpUrl, tu.name, tu.input, paymentToken);
-        if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
-        const text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+        let text: string;
+        if (HTTP_TOOL_NAMES.has(tu.name)) {
+          text = await executeHttpTool(tu.name, tu.input);
+        } else {
+          const result = await callToolSafe(mcpUrl, tu.name, tu.input, paymentToken);
+          if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
+          text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+        }
         blocks.push({ type: 'tool_result', name: tu.name, content: text });
         toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: text });
       }
@@ -169,10 +299,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
-    const tools = mcpTools.map((t: any) => ({
-      type: 'function' as const,
-      function: { name: t.name, description: t.description, parameters: t.inputSchema || { type: 'object', properties: {} } },
-    }));
+    const tools = [
+      ...HTTP_TOOLS_OPENAI,
+      ...mcpTools.map((t: any) => ({
+        type: 'function' as const,
+        function: { name: t.name, description: t.description, parameters: t.inputSchema || { type: 'object', properties: {} } },
+      })),
+    ];
 
     const msgs: any[] = [
       { role: 'system', content: buildSystemPrompt() },
@@ -199,9 +332,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
         if (!fnCall) continue;
         const args = JSON.parse(fnCall.arguments || '{}');
         blocks.push({ type: 'tool_use', name: fnCall.name, input: args });
-        const result = await callToolSafe(mcpUrl, fnCall.name, args, paymentToken);
-        if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
-        const text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+        let text: string;
+        if (HTTP_TOOL_NAMES.has(fnCall.name)) {
+          text = await executeHttpTool(fnCall.name, args);
+        } else {
+          const result = await callToolSafe(mcpUrl, fnCall.name, args, paymentToken);
+          if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
+          text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+        }
         blocks.push({ type: 'tool_result', name: fnCall.name, content: text });
         msgs.push({ role: 'tool', tool_call_id: tc.id, content: text });
       }
@@ -214,11 +352,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
     const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
     const mcpTools = await discoverTools(mcpUrl, paymentToken);
 
-    const functionDeclarations = mcpTools.map((t: any) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.inputSchema || { type: 'object', properties: {} },
-    }));
+    const functionDeclarations = [
+      ...HTTP_TOOLS_GEMINI,
+      ...mcpTools.map((t: any) => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.inputSchema || { type: 'object', properties: {} },
+      })),
+    ];
 
     const contents = (messages as any[]).map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -248,9 +389,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
           hasFunctionCall = true;
           const { name, args } = part.functionCall;
           blocks.push({ type: 'tool_use', name, input: args });
-          const result = await callToolSafe(mcpUrl, name, args, paymentToken);
-          if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
-          const text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+          let text: string;
+          if (HTTP_TOOL_NAMES.has(name)) {
+            text = await executeHttpTool(name, args);
+          } else {
+            const result = await callToolSafe(mcpUrl, name, args, paymentToken);
+            if (!result.ok) return finalizeFailure(result as Record<string, unknown>, blocks, mcpTools.length);
+            text = (result.content as any[]).map((c: any) => c.text ?? JSON.stringify(c)).join('\n');
+          }
           blocks.push({ type: 'tool_result', name, content: text });
           fnResponses.push({ functionResponse: { name, response: { output: text } } });
         }
